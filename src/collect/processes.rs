@@ -70,7 +70,8 @@ mod tests {
 
     #[test]
     fn detects_matching_comm() {
-        let root = std::env::temp_dir().join(format!("ha-desktop-proc-comm-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("ha-desktop-proc-comm-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("1")).unwrap();
         fs::create_dir_all(root.join("42")).unwrap();
@@ -88,11 +89,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("7")).unwrap();
         fs::write(root.join("7/comm"), "com.discordapp.\n").unwrap();
-        fs::write(
-            root.join("7/cmdline"),
-            b"/app/bin/com.discordapp.Discord\0",
-        )
-        .unwrap();
+        fs::write(root.join("7/cmdline"), b"/app/bin/com.discordapp.Discord\0").unwrap();
         let mut snapshot = Snapshot::default();
         collect_processes(&root, &[monitor()], &mut snapshot);
         assert_eq!(snapshot.get("discord_running"), Some(&Value::Bool(true)));

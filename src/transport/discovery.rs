@@ -191,6 +191,23 @@ fn component(config: &Config, device_id: &str, slug: &str, entity: &EntityMeta) 
             );
             map.insert("payload_press".into(), Value::String("PRESS".into()));
         }
+        EntityKind::Notify => {
+            map.insert(
+                "command_topic".into(),
+                Value::String(command_topic(config, device_id, &entity.id)),
+            );
+            map.insert("retain".into(), Value::Bool(false));
+        }
+    }
+    if entity.kind.publishes_state() {
+        map.insert(
+            "json_attributes_topic".into(),
+            Value::String(state_topic(config, device_id)),
+        );
+        map.insert(
+            "json_attributes_template".into(),
+            Value::String("{{ value_json.attrs | tojson }}".into()),
+        );
     }
     Value::Object(map)
 }
@@ -226,6 +243,9 @@ mod tests {
         assert_eq!(payload["cmps"]["cpu_usage"]["p"], "sensor");
         assert_eq!(payload["cmps"]["caffeine"]["p"], "switch");
         assert_eq!(payload["cmps"]["lock"]["p"], "button");
+        assert_eq!(payload["cmps"]["notify_message"]["p"], "notify");
+        assert_eq!(payload["cmps"]["notify_urgent"]["p"], "notify");
+        assert!(payload["cmps"].get("notify").is_none());
         assert!(payload["cmps"].get("shutdown").is_none());
         assert_eq!(
             payload["cmps"]["cpu_usage"]["default_entity_id"],

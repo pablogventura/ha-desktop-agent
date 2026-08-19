@@ -25,6 +25,13 @@ sensors:
   tailscale: true
   wireguard: true
   lan_ip: true
+  disk: true
+  battery: true
+  wifi: true
+  online: true
+  audio: true
+  mpris: false
+  dnd: true
   disabled: []
 
 processes:
@@ -48,9 +55,19 @@ actions:
   shutdown: false
   reboot: false
   caffeine: true
+  mute: true
+  volume: true
+  notify: true
+  dnd: true
 
 # Only argv registered here can be executed. Never interpolated from MQTT.
 commands: []
+
+notify:
+  # Default title for notify_message / notify_urgent when the MQTT payload has none.
+  title: Desktop
+  # Used when the MQTT message is empty.
+  body: Notification from ha-desktop-agent
 # - id: start_ollama
 #   name: Start Ollama
 #   argv: ["/usr/bin/systemctl", "--user", "start", "ollama"]

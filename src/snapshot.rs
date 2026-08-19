@@ -6,11 +6,16 @@ use std::time::Instant;
 #[derive(Debug, Default, Clone)]
 pub struct Snapshot {
     values: HashMap<String, Value>,
+    attrs: Map<String, JsonValue>,
 }
 
 impl Snapshot {
     pub fn set(&mut self, id: impl Into<String>, value: Value) {
         self.values.insert(id.into(), value);
+    }
+
+    pub fn set_attr(&mut self, key: impl Into<String>, value: JsonValue) {
+        self.attrs.insert(key.into(), value);
     }
 
     pub fn get(&self, id: &str) -> Option<&Value> {
@@ -27,7 +32,7 @@ impl Snapshot {
     pub fn to_json_map(&self, entities: &[EntityMeta]) -> Map<String, JsonValue> {
         let mut map = Map::new();
         for entity in entities {
-            if entity.kind == crate::entity::EntityKind::Button {
+            if !entity.kind.publishes_state() {
                 continue;
             }
             let value = self
@@ -37,13 +42,25 @@ impl Snapshot {
                 .unwrap_or(Value::Unavailable);
             map.insert(entity.id.clone(), value.to_json());
         }
+        if !self.attrs.is_empty() {
+            map.insert("attrs".into(), JsonValue::Object(self.attrs.clone()));
+        }
         map
+    }
+
+    pub fn attrs_changed(&self, previous: &Map<String, JsonValue>) -> bool {
+        &self.attrs != previous
+    }
+
+    pub fn attrs(&self) -> &Map<String, JsonValue> {
+        &self.attrs
     }
 }
 
 pub struct PublishDecision {
     pub should_publish: bool,
     last: HashMap<String, Value>,
+    last_attrs: Map<String, JsonValue>,
     last_force: Option<Instant>,
 }
 
@@ -52,6 +69,7 @@ impl PublishDecision {
         Self {
             should_publish: true,
             last: HashMap::new(),
+            last_attrs: Map::new(),
             last_force: None,
         }
     }
@@ -68,8 +86,11 @@ impl PublishDecision {
             .map(|t| now.duration_since(t) >= force_every)
             .unwrap_or(true);
         let mut changed = self.last.is_empty();
+        if snapshot.attrs_changed(&self.last_attrs) {
+            changed = true;
+        }
         for entity in entities {
-            if entity.kind == crate::entity::EntityKind::Button {
+            if !entity.kind.publishes_state() {
                 continue;
             }
             let current = snapshot
@@ -86,6 +107,7 @@ impl PublishDecision {
             }
             self.last.insert(entity.id.clone(), current);
         }
+        self.last_attrs = snapshot.attrs().clone();
         let publish = changed || force;
         if publish {
             self.last_force = Some(now);

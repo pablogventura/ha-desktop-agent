@@ -12,14 +12,19 @@ pub struct IfaceView {
     pub up: bool,
 }
 
-pub fn collect_net(config: &Config, snapshot: &mut Snapshot, proc_root: &Path, sys_class_net: &Path) {
+pub fn collect_net(
+    config: &Config,
+    snapshot: &mut Snapshot,
+    proc_root: &Path,
+    sys_class_net: &Path,
+) -> Option<String> {
     let ifaces = live_ifaces(sys_class_net);
     let listening = listening_ports_from_proc(proc_root);
     let default_ifaces = parse_default_routes(
         &read_to_string_lossy(&proc_root.join("net/route")).unwrap_or_default(),
     );
     let tailscaled = super::processes::ident_contains(proc_root, "tailscaled");
-    apply_net(
+    let lan_iface = apply_net(
         config,
         snapshot,
         &ifaces,
@@ -27,6 +32,7 @@ pub fn collect_net(config: &Config, snapshot: &mut Snapshot, proc_root: &Path, s
         &default_ifaces,
         tailscaled,
     );
+    lan_iface
 }
 
 fn live_ifaces(sys_class_net: &Path) -> Vec<IfaceView> {
@@ -69,9 +75,13 @@ pub fn apply_net(
     listening: &BTreeSet<u16>,
     default_ifaces: &[String],
     tailscaled: bool,
-) {
+) -> Option<String> {
+    let mut lan_iface = None;
     if config.sensors.tailscale {
-        let tailscale: Vec<_> = ifaces.iter().filter(|iface| is_tailscale(&iface.name)).collect();
+        let tailscale: Vec<_> = ifaces
+            .iter()
+            .filter(|iface| is_tailscale(&iface.name))
+            .collect();
         let running = tailscale.iter().any(|iface| iface.up) || tailscaled;
         snapshot.set("tailscale_running", Value::Bool(running));
         let ip = tailscale
@@ -79,21 +89,38 @@ pub fn apply_net(
             .find(|iface| iface.up && !iface.ipv4.is_empty())
             .or_else(|| tailscale.iter().find(|iface| !iface.ipv4.is_empty()))
             .and_then(|iface| iface.ipv4.first())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "none".into());
-        snapshot.set("tailscale_ip", Value::Text(ip));
+            .map(ToString::to_string);
+        snapshot.set("tailscale_ip", text_or_unavailable(ip));
     }
     if config.sensors.wireguard {
-        let wg: Vec<_> = ifaces.iter().filter(|iface| is_wireguard(&iface.name)).collect();
-        snapshot.set("wireguard_running", Value::Bool(wg.iter().any(|iface| iface.up)));
+        let wg: Vec<_> = ifaces
+            .iter()
+            .filter(|iface| is_wireguard(&iface.name))
+            .collect();
+        snapshot.set(
+            "wireguard_running",
+            Value::Bool(wg.iter().any(|iface| iface.up)),
+        );
         let ips: Vec<String> = wg
             .iter()
             .flat_map(|iface| iface.ipv4.iter().map(ToString::to_string))
             .collect();
-        snapshot.set("wireguard_ip", Value::Text(format_ip_list(&ips)));
+        if ips.is_empty() {
+            snapshot.set("wireguard_ip", Value::Unavailable);
+        } else {
+            snapshot.set("wireguard_ip", Value::Text(format_ip_list(&ips)));
+        }
+        snapshot.set_attr("wireguard_ips", serde_json::json!(ips));
     }
     if config.sensors.lan_ip {
-        snapshot.set("lan_ip", Value::Text(lan_ipv4(ifaces, default_ifaces)));
+        lan_iface = lan_iface_name(ifaces, default_ifaces);
+        snapshot.set(
+            "lan_ip",
+            text_or_unavailable(lan_ipv4(ifaces, default_ifaces)),
+        );
+        if let Some(name) = &lan_iface {
+            snapshot.set_attr("lan_iface", serde_json::json!(name));
+        }
     }
     for listener in &config.listeners {
         let id = format!("{}_listening", listener.id);
@@ -101,6 +128,14 @@ pub fn apply_net(
             continue;
         }
         snapshot.set(id, Value::Bool(listening.contains(&listener.port)));
+    }
+    lan_iface
+}
+
+fn text_or_unavailable(value: Option<String>) -> Value {
+    match value {
+        Some(text) if !text.is_empty() => Value::Text(text),
+        _ => Value::Unavailable,
     }
 }
 
@@ -131,16 +166,21 @@ fn usable_ipv4(ip: Ipv4Addr) -> bool {
     !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() && !ip.is_multicast()
 }
 
-pub fn lan_ipv4(ifaces: &[IfaceView], default_ifaces: &[String]) -> String {
+pub fn lan_iface_name(ifaces: &[IfaceView], default_ifaces: &[String]) -> Option<String> {
     for name in default_ifaces {
         if skip_lan_iface(name) {
             continue;
         }
-        if let Some(ip) = ipv4_for(ifaces, name) {
-            return ip.to_string();
+        if ipv4_for(ifaces, name).is_some() {
+            return Some(name.clone());
         }
     }
-    "none".into()
+    None
+}
+
+fn lan_ipv4(ifaces: &[IfaceView], default_ifaces: &[String]) -> Option<String> {
+    lan_iface_name(ifaces, default_ifaces)
+        .and_then(|name| ipv4_for(ifaces, &name).map(|ip| ip.to_string()))
 }
 
 fn ipv4_for(ifaces: &[IfaceView], name: &str) -> Option<Ipv4Addr> {
@@ -152,10 +192,36 @@ fn ipv4_for(ifaces: &[IfaceView], name: &str) -> Option<Ipv4Addr> {
 }
 
 pub fn format_ip_list(ips: &[String]) -> String {
-    if ips.is_empty() {
-        return "none".into();
-    }
     truncate_ha_state(&ips.join(", "))
+}
+
+pub fn parse_net_dev_counters(contents: &str, iface: &str) -> Option<(u64, u64)> {
+    for line in contents.lines() {
+        let line = line.trim();
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim() != iface {
+            continue;
+        }
+        let mut fields = rest.split_whitespace();
+        let rx_bytes = fields.next()?.parse().ok()?;
+        for _ in 0..7 {
+            fields.next()?;
+        }
+        let tx_bytes = fields.next()?.parse().ok()?;
+        return Some((rx_bytes, tx_bytes));
+    }
+    None
+}
+
+pub fn rates_kbps(prev: (u64, u64), now: (u64, u64), elapsed_s: f64) -> Option<(f64, f64)> {
+    if elapsed_s <= 0.0 {
+        return None;
+    }
+    let rx = now.0.saturating_sub(prev.0) as f64 / elapsed_s / 1000.0;
+    let tx = now.1.saturating_sub(prev.1) as f64 / elapsed_s / 1000.0;
+    Some((rx, tx))
 }
 
 pub fn parse_listening_ports(contents: &str) -> BTreeSet<u16> {
@@ -277,8 +343,8 @@ mod tests {
             iface("wlp2s0", "192.168.1.72", true),
         ];
         assert_eq!(
-            lan_ipv4(&ifaces, &["tun0".into(), "wlp2s0".into()]),
-            "192.168.1.72"
+            lan_ipv4(&ifaces, &["tun0".into(), "wlp2s0".into()]).as_deref(),
+            Some("192.168.1.72")
         );
     }
 
@@ -320,6 +386,28 @@ mod tests {
             Some(&Value::Text("10.8.0.2".into()))
         );
         assert_eq!(snapshot.get("ssh_listening"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn missing_lan_is_unavailable() {
+        let config = Config::default();
+        let mut snapshot = Snapshot::default();
+        apply_net(&config, &mut snapshot, &[], &BTreeSet::new(), &[], false);
+        assert_eq!(snapshot.get("lan_ip"), Some(&Value::Unavailable));
+        assert_eq!(snapshot.get("tailscale_ip"), Some(&Value::Unavailable));
+        assert_eq!(snapshot.get("wireguard_ip"), Some(&Value::Unavailable));
+    }
+
+    #[test]
+    fn parses_net_dev_counters() {
+        let contents = "\
+Inter-|   Receive                                                |  Transmit
+ wlp2s0: 1000 1 0 0 0 0 0 0 2000 1 0 0 0 0 0 0
+";
+        assert_eq!(
+            parse_net_dev_counters(contents, "wlp2s0"),
+            Some((1000, 2000))
+        );
     }
 
     #[test]

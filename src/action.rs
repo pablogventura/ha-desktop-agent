@@ -1,4 +1,6 @@
 use crate::config::{CommandSpec, Config};
+use crate::entity::truncate_ha_state;
+use serde_json::{Map, Value as JsonValue};
 use std::time::Duration;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -7,15 +9,49 @@ use tracing::{info, warn};
 use crate::collect::linux_session::LinuxSession;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_NOTIFY_PAYLOAD_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationUrgency {
+    Normal,
+    Critical,
+}
+
+impl NotificationUrgency {
+    pub fn dbus_byte(self) -> u8 {
+        match self {
+            Self::Normal => 1,
+            Self::Critical => 2,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum IncomingCommand {
-    Switch { id: String, on: bool },
-    Press { id: String },
+    Switch {
+        id: String,
+        on: bool,
+    },
+    Press {
+        id: String,
+    },
+    Notify {
+        title: Option<String>,
+        body: Option<String>,
+        urgency: NotificationUrgency,
+    },
 }
 
 impl IncomingCommand {
     pub fn parse(entity_id: &str, payload: &str) -> Option<Self> {
+        if payload.len() > MAX_NOTIFY_PAYLOAD_BYTES {
+            return None;
+        }
+        match entity_id {
+            "notify_message" => return parse_notify_payload(payload, NotificationUrgency::Normal),
+            "notify_urgent" => return parse_notify_payload(payload, NotificationUrgency::Critical),
+            _ => {}
+        }
         let payload = payload.trim();
         let upper = payload.to_ascii_uppercase();
         match upper.as_str() {
@@ -27,12 +63,48 @@ impl IncomingCommand {
                 id: entity_id.to_string(),
                 on: false,
             }),
-            "PRESS" | "PRESSED" | "" => Some(Self::Press {
+            "PRESS" | "PRESSED" | "LOCK" | "" => Some(Self::Press {
                 id: entity_id.to_string(),
             }),
             _ => None,
         }
     }
+}
+
+fn parse_notify_payload(payload: &str, urgency: NotificationUrgency) -> Option<IncomingCommand> {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return Some(IncomingCommand::Notify {
+            title: None,
+            body: None,
+            urgency,
+        });
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        let value: JsonValue = serde_json::from_str(trimmed).ok()?;
+        let JsonValue::Object(object) = value else {
+            return None;
+        };
+        return Some(IncomingCommand::Notify {
+            title: json_text(&object, "title"),
+            body: json_text(&object, "body").or_else(|| json_text(&object, "message")),
+            urgency,
+        });
+    }
+    Some(IncomingCommand::Notify {
+        title: None,
+        body: Some(trimmed.to_string()),
+        urgency,
+    })
+}
+
+fn json_text(object: &Map<String, JsonValue>, key: &str) -> Option<String> {
+    object
+        .get(key)
+        .and_then(JsonValue::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub struct ActionRouter<'a> {
@@ -57,24 +129,96 @@ impl<'a> ActionRouter<'a> {
         match command {
             IncomingCommand::Switch { id, on } => self.handle_switch(&id, on).await,
             IncomingCommand::Press { id } => self.handle_press(&id).await,
+            IncomingCommand::Notify {
+                title,
+                body,
+                urgency,
+            } => self.handle_notify(title, body, urgency).await,
         }
     }
 
     async fn handle_switch(&self, id: &str, on: bool) -> anyhow::Result<()> {
-        if id != "caffeine" {
-            warn!("ignored switch for unknown entity {id}");
-            return Ok(());
+        match id {
+            "caffeine" => {
+                if !self.config.action_enabled("caffeine") {
+                    anyhow::bail!("caffeine is disabled in config");
+                }
+                #[cfg(target_os = "linux")]
+                if let Some(session) = self.session {
+                    session.set_caffeine(on).await?;
+                    info!(on, "caffeine updated");
+                    return Ok(());
+                }
+                anyhow::bail!("caffeine is not supported on this platform");
+            }
+            "mute" => {
+                if !self.config.action_enabled("mute") {
+                    anyhow::bail!("mute is disabled in config");
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    crate::collect::audio::set_muted(on).await?;
+                    info!(on, "mute updated");
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "linux"))]
+                anyhow::bail!("mute is not supported on this platform");
+            }
+            "do_not_disturb" => {
+                if !self.config.action_enabled("do_not_disturb") {
+                    anyhow::bail!("do_not_disturb is disabled in config");
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    crate::collect::dnd::set_dnd(on).await?;
+                    info!(on, "do_not_disturb updated");
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "linux"))]
+                anyhow::bail!("do_not_disturb is not supported on this platform");
+            }
+            "lock" => {
+                if !on {
+                    return Ok(());
+                }
+                if !self.config.action_enabled("lock") {
+                    anyhow::bail!("lock is disabled in config");
+                }
+                #[cfg(target_os = "linux")]
+                if let Some(session) = self.session {
+                    session.lock_screen().await?;
+                    info!("lock requested");
+                    return Ok(());
+                }
+                anyhow::bail!("lock is not supported on this platform");
+            }
+            other => {
+                warn!("ignored switch for unknown entity {other}");
+                Ok(())
+            }
         }
-        if !self.config.action_enabled("caffeine") {
-            anyhow::bail!("caffeine is disabled in config");
+    }
+
+    async fn handle_notify(
+        &self,
+        title: Option<String>,
+        body: Option<String>,
+        urgency: NotificationUrgency,
+    ) -> anyhow::Result<()> {
+        if !self.config.action_enabled("notify") {
+            anyhow::bail!("notify is disabled in config");
         }
+        let title = truncate_ha_state(title.as_deref().unwrap_or(&self.config.notify.title));
+        let body = truncate_ha_state(body.as_deref().unwrap_or(&self.config.notify.body));
         #[cfg(target_os = "linux")]
         if let Some(session) = self.session {
-            session.set_caffeine(on).await?;
-            info!(on, "caffeine updated");
+            session
+                .send_notify(&title, &body, urgency.dbus_byte())
+                .await?;
+            info!(?urgency, "desktop notification sent");
             return Ok(());
         }
-        anyhow::bail!("caffeine is not supported on this platform");
+        anyhow::bail!("notify is not supported on this platform");
     }
 
     async fn handle_press(&self, id: &str) -> anyhow::Result<()> {
@@ -93,6 +237,32 @@ impl<'a> ActionRouter<'a> {
                     return Ok(());
                 }
                 anyhow::bail!("power action '{id}' is not supported on this platform");
+            }
+            "volume_up" => {
+                #[cfg(target_os = "linux")]
+                {
+                    crate::collect::audio::bump_volume(5).await?;
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "linux"))]
+                anyhow::bail!("volume is not supported on this platform");
+            }
+            "volume_down" => {
+                #[cfg(target_os = "linux")]
+                {
+                    crate::collect::audio::bump_volume(-5).await?;
+                    return Ok(());
+                }
+                #[cfg(not(target_os = "linux"))]
+                anyhow::bail!("volume is not supported on this platform");
+            }
+            "media_play_pause" | "media_next" | "media_previous" => {
+                #[cfg(target_os = "linux")]
+                if let Some(session) = self.session {
+                    session.mpris_action(id).await?;
+                    return Ok(());
+                }
+                anyhow::bail!("mpris is not supported on this platform");
             }
             other => {
                 warn!("ignored press for unknown entity {other}");
@@ -136,6 +306,61 @@ mod tests {
             IncomingCommand::Press { id } => assert_eq!(id, "suspend"),
             _ => panic!("expected press"),
         }
+        match IncomingCommand::parse("lock", "LOCK").unwrap() {
+            IncomingCommand::Press { id } => assert_eq!(id, "lock"),
+            _ => panic!("expected press"),
+        }
         assert!(IncomingCommand::parse("caffeine", "explode").is_none());
+    }
+
+    #[test]
+    fn parses_notify_plain_text_and_json() {
+        match IncomingCommand::parse("notify_message", "Hello").unwrap() {
+            IncomingCommand::Notify {
+                title,
+                body,
+                urgency,
+            } => {
+                assert!(title.is_none());
+                assert_eq!(body.as_deref(), Some("Hello"));
+                assert_eq!(urgency, NotificationUrgency::Normal);
+            }
+            _ => panic!("expected notify"),
+        }
+        match IncomingCommand::parse(
+            "notify_urgent",
+            r#"{"title":"Alarm","body":"Door open","bypass_dnd":true}"#,
+        )
+        .unwrap()
+        {
+            IncomingCommand::Notify {
+                title,
+                body,
+                urgency,
+            } => {
+                assert_eq!(title.as_deref(), Some("Alarm"));
+                assert_eq!(body.as_deref(), Some("Door open"));
+                assert_eq!(urgency, NotificationUrgency::Critical);
+            }
+            _ => panic!("expected notify"),
+        }
+        match IncomingCommand::parse("notify_message", r#"{"message":"Ping"}"#).unwrap() {
+            IncomingCommand::Notify { body, urgency, .. } => {
+                assert_eq!(body.as_deref(), Some("Ping"));
+                assert_eq!(urgency, NotificationUrgency::Normal);
+            }
+            _ => panic!("expected notify"),
+        }
+        match IncomingCommand::parse("notify_message", "  ").unwrap() {
+            IncomingCommand::Notify { title, body, .. } => {
+                assert!(title.is_none());
+                assert!(body.is_none());
+            }
+            _ => panic!("expected notify"),
+        }
+        assert!(IncomingCommand::parse("notify_message", "[1]").is_none());
+        assert!(IncomingCommand::parse("notify_message", "{").is_none());
+        let oversized = "x".repeat(MAX_NOTIFY_PAYLOAD_BYTES + 1);
+        assert!(IncomingCommand::parse("notify_message", &oversized).is_none());
     }
 }

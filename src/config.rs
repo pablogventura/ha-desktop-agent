@@ -37,6 +37,8 @@ pub struct Config {
     pub actions: ActionsConfig,
     pub commands: Vec<CommandSpec>,
     pub power: PowerConfig,
+    #[serde(default)]
+    pub notify: NotifyConfig,
 }
 
 impl Default for Config {
@@ -60,6 +62,7 @@ impl Default for Config {
             actions: ActionsConfig::default(),
             commands: Vec::new(),
             power: PowerConfig::default(),
+            notify: NotifyConfig::default(),
         }
     }
 }
@@ -143,6 +146,20 @@ pub struct SensorsConfig {
     pub wireguard: bool,
     #[serde(default = "default_true")]
     pub lan_ip: bool,
+    #[serde(default = "default_true")]
+    pub disk: bool,
+    #[serde(default = "default_true")]
+    pub battery: bool,
+    #[serde(default = "default_true")]
+    pub wifi: bool,
+    #[serde(default = "default_true")]
+    pub online: bool,
+    #[serde(default = "default_true")]
+    pub audio: bool,
+    #[serde(default)]
+    pub mpris: bool,
+    #[serde(default = "default_true")]
+    pub dnd: bool,
     /// Entity ids excluded from discovery and collection.
     pub disabled: Vec<String>,
 }
@@ -157,6 +174,13 @@ impl Default for SensorsConfig {
             tailscale: true,
             wireguard: true,
             lan_ip: true,
+            disk: true,
+            battery: true,
+            wifi: true,
+            online: true,
+            audio: true,
+            mpris: false,
+            dnd: true,
             disabled: Vec::new(),
         }
     }
@@ -184,6 +208,14 @@ pub struct ActionsConfig {
     pub shutdown: bool,
     pub reboot: bool,
     pub caffeine: bool,
+    #[serde(default = "default_true")]
+    pub mute: bool,
+    #[serde(default = "default_true")]
+    pub volume: bool,
+    #[serde(default = "default_true")]
+    pub notify: bool,
+    #[serde(default = "default_true")]
+    pub dnd: bool,
 }
 
 impl Default for ActionsConfig {
@@ -195,6 +227,10 @@ impl Default for ActionsConfig {
             shutdown: false,
             reboot: false,
             caffeine: true,
+            mute: true,
+            volume: true,
+            notify: true,
+            dnd: true,
         }
     }
 }
@@ -204,6 +240,22 @@ pub struct CommandSpec {
     pub id: String,
     pub name: Option<String>,
     pub argv: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct NotifyConfig {
+    pub title: String,
+    pub body: String,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            title: "Desktop".into(),
+            body: "Notification from ha-desktop-agent".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -295,6 +347,11 @@ impl Config {
             "shutdown" => self.actions.shutdown,
             "reboot" => self.actions.reboot,
             "caffeine" => self.actions.caffeine,
+            "mute" => self.actions.mute,
+            "volume_up" | "volume_down" => self.actions.volume,
+            "notify" | "notify_message" | "notify_urgent" => self.actions.notify,
+            "do_not_disturb" => self.actions.dnd,
+            "media_play_pause" | "media_next" | "media_previous" => self.sensors.mpris,
             _ => self.commands.iter().any(|command| command.id == entity_id),
         }
     }

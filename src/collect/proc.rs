@@ -105,6 +105,10 @@ pub fn parse_uptime(contents: &str) -> Option<f64> {
         .and_then(|v| v.parse().ok())
 }
 
+pub fn seconds_as_hours(seconds: f64) -> f64 {
+    seconds / 3600.0
+}
+
 pub fn parse_os_release(contents: &str) -> (Option<String>, Option<String>) {
     let mut name = None;
     let mut version = None;
@@ -203,7 +207,7 @@ impl ProcCollector {
         }
         if let Ok(uptime) = std::fs::read_to_string(&self.uptime) {
             if let Some(seconds) = parse_uptime(&uptime) {
-                snapshot.set("uptime", Value::Number(seconds));
+                snapshot.set("uptime", Value::Number(seconds_as_hours(seconds)));
             }
         }
         if let Ok(os) = std::fs::read_to_string(&self.os_release) {
@@ -269,5 +273,6 @@ SwapFree:       1500000 kB
         assert_eq!(name.as_deref(), Some("Ubuntu"));
         assert_eq!(version.as_deref(), Some("24.04"));
         assert_eq!(parse_uptime("12345.67 890\n"), Some(12345.67));
+        assert!((seconds_as_hours(7200.0) - 2.0).abs() < f64::EPSILON);
     }
 }

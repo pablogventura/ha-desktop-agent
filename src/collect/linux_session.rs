@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::entity::{truncate_ha_state, Value};
 use crate::snapshot::Snapshot;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
-use zbus::zvariant::OwnedFd;
+use zbus::zvariant::{OwnedFd, OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
 pub type CaffeineLock = Arc<Mutex<Option<OwnedFd>>>;
@@ -33,6 +34,8 @@ trait Login1Manager {
     fn power_off(&self, interactive: bool) -> zbus::Result<()>;
     fn reboot(&self, interactive: bool) -> zbus::Result<()>;
     fn lock_session(&self, session_id: &str) -> zbus::Result<()>;
+    fn list_sessions(&self) -> zbus::Result<Vec<(String, u32, String, String, OwnedObjectPath)>>;
+    fn get_session(&self, session_id: &str) -> zbus::Result<OwnedObjectPath>;
     #[zbus(name = "GetSessionByPID")]
     fn get_session_by_pid(&self, pid: u32) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
 }
@@ -47,6 +50,10 @@ trait Login1Session {
     fn idle_since_hint(&self) -> zbus::Result<u64>;
     #[zbus(property, name = "Id")]
     fn id(&self) -> zbus::Result<String>;
+    #[zbus(property, name = "LockedHint")]
+    fn locked_hint(&self) -> zbus::Result<bool>;
+    #[zbus(property, name = "Class")]
+    fn class(&self) -> zbus::Result<String>;
 }
 
 #[zbus::proxy(
@@ -69,10 +76,109 @@ trait FocusedWindow {
     fn get(&self) -> zbus::Result<String>;
 }
 
+#[zbus::proxy(
+    interface = "org.gnome.ScreenSaver",
+    default_service = "org.gnome.ScreenSaver",
+    default_path = "/org/gnome/ScreenSaver"
+)]
+trait GnomeScreenSaver {
+    #[zbus(name = "GetActive")]
+    fn get_active(&self) -> zbus::Result<bool>;
+    fn lock(&self) -> zbus::Result<()>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.ScreenSaver",
+    default_service = "org.freedesktop.ScreenSaver",
+    default_path = "/org/freedesktop/ScreenSaver"
+)]
+trait FreedesktopScreenSaver {
+    fn lock(&self) -> zbus::Result<()>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.DBus",
+    default_service = "org.freedesktop.DBus",
+    default_path = "/org/freedesktop/DBus"
+)]
+trait FreedesktopDbus {
+    fn list_names(&self) -> zbus::Result<Vec<String>>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager",
+    default_service = "org.freedesktop.NetworkManager",
+    default_path = "/org/freedesktop/NetworkManager"
+)]
+trait NetworkManager {
+    #[zbus(property)]
+    fn devices(&self) -> zbus::Result<Vec<OwnedObjectPath>>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Device",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+trait NmDevice {
+    #[zbus(property, name = "DeviceType")]
+    fn device_type(&self) -> zbus::Result<u32>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.Device.Wireless",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+trait NmWireless {
+    #[zbus(property)]
+    fn active_access_point(&self) -> zbus::Result<OwnedObjectPath>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.NetworkManager.AccessPoint",
+    default_service = "org.freedesktop.NetworkManager"
+)]
+trait NmAccessPoint {
+    #[zbus(property)]
+    fn ssid(&self) -> zbus::Result<Vec<u8>>;
+    #[zbus(property)]
+    fn strength(&self) -> zbus::Result<u8>;
+}
+
+#[zbus::proxy(interface = "org.mpris.MediaPlayer2.Player")]
+trait MprisPlayer {
+    fn play_pause(&self) -> zbus::Result<()>;
+    fn next(&self) -> zbus::Result<()>;
+    fn previous(&self) -> zbus::Result<()>;
+    #[zbus(property)]
+    fn playback_status(&self) -> zbus::Result<String>;
+    #[zbus(property)]
+    fn metadata(&self) -> zbus::Result<HashMap<String, OwnedValue>>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.Notifications",
+    default_service = "org.freedesktop.Notifications",
+    default_path = "/org/freedesktop/Notifications"
+)]
+trait Notifications {
+    fn notify(
+        &self,
+        app_name: &str,
+        replaces_id: u32,
+        app_icon: &str,
+        summary: &str,
+        body: &str,
+        actions: &[String],
+        hints: HashMap<String, zbus::zvariant::Value<'_>>,
+        expire_timeout: i32,
+    ) -> zbus::Result<u32>;
+}
+
 pub struct LinuxSession {
     system: Option<Connection>,
     session: Option<Connection>,
     caffeine: CaffeineLock,
+    mpris_owner: Mutex<Option<String>>,
 }
 
 impl LinuxSession {
@@ -95,14 +201,22 @@ impl LinuxSession {
             system,
             session,
             caffeine,
+            mpris_owner: Mutex::new(None),
         }
     }
 
     pub async fn collect(&self, config: &Config, snapshot: &mut Snapshot) {
         self.collect_desktop(snapshot);
         self.collect_idle(config, snapshot).await;
+        self.collect_locked(snapshot).await;
         self.collect_inhibitors(snapshot).await;
         self.collect_focused_window(config, snapshot).await;
+        if config.sensors.wifi {
+            self.collect_wifi(snapshot).await;
+        }
+        if config.sensors.mpris {
+            self.collect_mpris(snapshot).await;
+        }
         let caffeine_on = self.caffeine.lock().await.is_some();
         snapshot.set("caffeine", Value::Bool(caffeine_on));
     }
@@ -238,6 +352,9 @@ impl LinuxSession {
     }
 
     pub async fn power_action(&self, action: &str) -> anyhow::Result<()> {
+        if action == "lock" {
+            return self.lock_screen().await;
+        }
         let conn = self
             .system
             .as_ref()
@@ -248,31 +365,290 @@ impl LinuxSession {
             "hibernate" => proxy.hibernate(false).await?,
             "shutdown" => proxy.power_off(false).await?,
             "reboot" => proxy.reboot(false).await?,
-            "lock" => {
-                let session_id = session_id(conn).await?;
-                proxy.lock_session(&session_id).await?;
-            }
             other => anyhow::bail!("unknown action {other}"),
+        }
+        Ok(())
+    }
+
+    pub async fn lock_screen(&self) -> anyhow::Result<()> {
+        if let Some(conn) = self.session.as_ref() {
+            if let Ok(proxy) = GnomeScreenSaverProxy::new(conn).await {
+                if proxy.lock().await.is_ok() {
+                    return Ok(());
+                }
+            }
+            if let Ok(proxy) = FreedesktopScreenSaverProxy::new(conn).await {
+                if proxy.lock().await.is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        let conn = self
+            .system
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("system dbus unavailable"))?;
+        let proxy = Login1ManagerProxy::new(conn).await?;
+        let session_id = graphical_session_id(conn).await?;
+        proxy.lock_session(&session_id).await?;
+        Ok(())
+    }
+
+    async fn collect_locked(&self, snapshot: &mut Snapshot) {
+        if let Some(conn) = self.session.as_ref() {
+            if let Ok(proxy) = GnomeScreenSaverProxy::new(conn).await {
+                if let Ok(active) = proxy.get_active().await {
+                    snapshot.set("locked", Value::Bool(active));
+                    return;
+                }
+            }
+        }
+        let Some(conn) = self.system.as_ref() else {
+            return;
+        };
+        if let Some(session) = session_proxy(conn).await {
+            if let Ok(locked) = session.locked_hint().await {
+                snapshot.set("locked", Value::Bool(locked));
+            }
+        }
+    }
+
+    async fn collect_wifi(&self, snapshot: &mut Snapshot) {
+        let Some(conn) = self.system.as_ref() else {
+            snapshot.set("wifi_ssid", Value::Unavailable);
+            snapshot.set("wifi_signal", Value::Unavailable);
+            return;
+        };
+        let Some((ssid, strength)) = wifi_active(conn).await else {
+            snapshot.set("wifi_ssid", Value::Unavailable);
+            snapshot.set("wifi_signal", Value::Unavailable);
+            return;
+        };
+        if ssid.is_empty() {
+            snapshot.set("wifi_ssid", Value::Unavailable);
+        } else {
+            snapshot.set("wifi_ssid", Value::Text(truncate_ha_state(&ssid)));
+        }
+        let dbm = f64::from(strength) - 100.0;
+        snapshot.set("wifi_signal", Value::Number(dbm));
+    }
+
+    async fn collect_mpris(&self, snapshot: &mut Snapshot) {
+        let Some(conn) = self.session.as_ref() else {
+            return;
+        };
+        let owner = match pick_mpris_owner(conn).await {
+            Some(owner) => owner,
+            None => {
+                *self.mpris_owner.lock().await = None;
+                snapshot.set("media_title", Value::Unavailable);
+                snapshot.set("media_artist", Value::Unavailable);
+                snapshot.set("media_playing", Value::Bool(false));
+                return;
+            }
+        };
+        let Ok(proxy) = mpris_proxy(conn, &owner).await else {
+            return;
+        };
+        let playing = proxy
+            .playback_status()
+            .await
+            .ok()
+            .map(|status| status.eq_ignore_ascii_case("Playing"))
+            .unwrap_or(false);
+        snapshot.set("media_playing", Value::Bool(playing));
+        if let Ok(meta) = proxy.metadata().await {
+            snapshot.set(
+                "media_title",
+                mpris_string(&meta, "xesam:title")
+                    .map(|text| Value::Text(truncate_ha_state(&text)))
+                    .unwrap_or(Value::Unavailable),
+            );
+            snapshot.set(
+                "media_artist",
+                mpris_artists(&meta)
+                    .map(|text| Value::Text(truncate_ha_state(&text)))
+                    .unwrap_or(Value::Unavailable),
+            );
+        }
+        snapshot.set_attr("mpris_player", serde_json::json!(owner));
+        *self.mpris_owner.lock().await = Some(owner);
+    }
+
+    pub async fn send_notify(&self, title: &str, body: &str, urgency: u8) -> anyhow::Result<()> {
+        let conn = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("session dbus unavailable"))?;
+        let proxy = NotificationsProxy::new(conn).await?;
+        let mut hints: HashMap<String, zbus::zvariant::Value<'_>> = HashMap::new();
+        hints.insert("urgency".into(), zbus::zvariant::Value::U8(urgency));
+        let expire_timeout = if urgency >= 2 { -1 } else { 5000 };
+        proxy
+            .notify(
+                "ha-desktop-agent",
+                0,
+                "computer",
+                title,
+                body,
+                &[],
+                hints,
+                expire_timeout,
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mpris_action(&self, action: &str) -> anyhow::Result<()> {
+        let conn = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("session dbus unavailable"))?;
+        let owner = {
+            let cached = self.mpris_owner.lock().await.clone();
+            match cached {
+                Some(owner) => owner,
+                None => pick_mpris_owner(conn)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("no MPRIS player"))?,
+            }
+        };
+        let proxy = mpris_proxy(conn, &owner).await?;
+        match action {
+            "media_play_pause" => proxy.play_pause().await?,
+            "media_next" => proxy.next().await?,
+            "media_previous" => proxy.previous().await?,
+            other => anyhow::bail!("unknown mpris action {other}"),
         }
         Ok(())
     }
 }
 
-async fn session_id(conn: &Connection) -> anyhow::Result<String> {
+const NM_DEVICE_WIFI: u32 = 2;
+const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
+
+async fn wifi_active(conn: &Connection) -> Option<(String, u8)> {
+    let nm = NetworkManagerProxy::new(conn).await.ok()?;
+    let devices = nm.devices().await.ok()?;
+    for path in devices {
+        let device = NmDeviceProxy::builder(conn)
+            .path(&path)
+            .ok()?
+            .build()
+            .await
+            .ok()?;
+        if device.device_type().await.ok()? != NM_DEVICE_WIFI {
+            continue;
+        }
+        let wireless = NmWirelessProxy::builder(conn)
+            .path(&path)
+            .ok()?
+            .build()
+            .await
+            .ok()?;
+        let ap_path = wireless.active_access_point().await.ok()?;
+        if ap_path.as_str() == "/" {
+            continue;
+        }
+        let ap = NmAccessPointProxy::builder(conn)
+            .path(&ap_path)
+            .ok()?
+            .build()
+            .await
+            .ok()?;
+        let ssid = String::from_utf8_lossy(&ap.ssid().await.ok()?).into_owned();
+        let strength = ap.strength().await.ok()?;
+        return Some((ssid, strength));
+    }
+    None
+}
+
+async fn pick_mpris_owner(conn: &Connection) -> Option<String> {
+    let dbus = FreedesktopDbusProxy::new(conn).await.ok()?;
+    let names = dbus.list_names().await.ok()?;
+    names
+        .into_iter()
+        .find(|name| name.starts_with(MPRIS_PREFIX) && !name.contains("playerctld"))
+}
+
+async fn mpris_proxy<'a>(
+    conn: &'a Connection,
+    owner: &str,
+) -> anyhow::Result<MprisPlayerProxy<'a>> {
+    Ok(MprisPlayerProxy::builder(conn)
+        .destination(owner.to_owned())?
+        .path("/org/mpris/MediaPlayer2")?
+        .build()
+        .await?)
+}
+
+fn owned_to_string(value: &OwnedValue) -> Option<String> {
+    if let Ok(text) = <&str>::try_from(value) {
+        return Some(text.to_string());
+    }
+    String::try_from(value.clone()).ok()
+}
+
+fn mpris_string(meta: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
+    meta.get(key)
+        .and_then(owned_to_string)
+        .filter(|text| !text.is_empty())
+}
+
+fn mpris_artists(meta: &HashMap<String, OwnedValue>) -> Option<String> {
+    let value = meta.get("xesam:artist")?;
+    if let Ok(list) = <Vec<String>>::try_from(value.clone()) {
+        let joined = list.join(", ");
+        if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        }
+    } else {
+        owned_to_string(value).filter(|text| !text.is_empty())
+    }
+}
+
+async fn graphical_session_id(conn: &Connection) -> anyhow::Result<String> {
+    let manager = Login1ManagerProxy::new(conn).await?;
+    let uid = unsafe { libc::getuid() };
+    let sessions = manager.list_sessions().await?;
+    let mut fallback = None;
+    for (id, session_uid, _user, seat, path) in sessions {
+        if session_uid != uid {
+            continue;
+        }
+        let Ok(builder) = Login1SessionProxy::builder(conn).path(path) else {
+            continue;
+        };
+        let Ok(session) = builder.build().await else {
+            continue;
+        };
+        let class = session.class().await.unwrap_or_default();
+        if class == "manager" {
+            continue;
+        }
+        if !seat.is_empty() && seat != "-" {
+            return Ok(id);
+        }
+        if class == "user" {
+            fallback = Some(id);
+        }
+    }
+    if let Some(id) = fallback {
+        return Ok(id);
+    }
     if let Ok(id) = std::env::var("XDG_SESSION_ID") {
         if !id.is_empty() {
             return Ok(id);
         }
     }
-    let session = session_proxy(conn)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("could not resolve logind session"))?;
-    Ok(session.id().await?)
+    anyhow::bail!("could not resolve graphical logind session")
 }
 
 async fn session_proxy<'a>(conn: &'a Connection) -> Option<Login1SessionProxy<'a>> {
     let manager = Login1ManagerProxy::new(conn).await.ok()?;
-    let path = manager.get_session_by_pid(std::process::id()).await.ok()?;
+    let id = graphical_session_id(conn).await.ok()?;
+    let path = manager.get_session(&id).await.ok()?;
     Login1SessionProxy::builder(conn)
         .path(path)
         .ok()?
@@ -328,7 +704,12 @@ fn unix_now_us() -> u64 {
 mod tests {
     use super::*;
 
-    fn item(what: &str, who: &str, why: &str, mode: &str) -> (String, String, String, String, u32, u32) {
+    fn item(
+        what: &str,
+        who: &str,
+        why: &str,
+        mode: &str,
+    ) -> (String, String, String, String, u32, u32) {
         (what.into(), who.into(), why.into(), mode.into(), 0, 0)
     }
 
@@ -367,4 +748,3 @@ mod tests {
         assert!(text.ends_with("..."));
     }
 }
-

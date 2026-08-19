@@ -7,6 +7,7 @@ pub enum EntityKind {
     BinarySensor,
     Switch,
     Button,
+    Notify,
 }
 
 impl EntityKind {
@@ -16,7 +17,12 @@ impl EntityKind {
             Self::BinarySensor => "binary_sensor",
             Self::Switch => "switch",
             Self::Button => "button",
+            Self::Notify => "notify",
         }
+    }
+
+    pub fn publishes_state(self) -> bool {
+        !matches!(self, Self::Button | Self::Notify)
     }
 }
 
@@ -157,6 +163,21 @@ impl EntityMeta {
             hysteresis: 0.0,
         }
     }
+
+    fn notify(id: &str, name: &str, icon: Option<&'static str>) -> Self {
+        Self {
+            id: id.into(),
+            kind: EntityKind::Notify,
+            name: name.into(),
+            device_class: None,
+            unit: None,
+            state_class: None,
+            precision: None,
+            entity_category: None,
+            icon,
+            hysteresis: 0.0,
+        }
+    }
 }
 
 pub fn enabled_entities(config: &Config) -> Vec<EntityMeta> {
@@ -195,6 +216,59 @@ pub fn enabled_entities(config: &Config) -> Vec<EntityMeta> {
             "Caffeine",
             Some("mdi:coffee"),
         ));
+    }
+    if config.sensors.audio && config.actions.mute && !config.is_disabled("mute") {
+        entities.push(EntityMeta::switch("mute", "Mute", Some("mdi:volume-off")));
+    }
+    if config.sensors.dnd && config.actions.dnd && !config.is_disabled("do_not_disturb") {
+        entities.push(EntityMeta::switch(
+            "do_not_disturb",
+            "Do not disturb",
+            Some("mdi:minus-circle"),
+        ));
+    }
+    if config.sensors.audio && config.actions.volume {
+        for (id, name, icon) in [
+            ("volume_up", "Volume up", Some("mdi:volume-plus")),
+            ("volume_down", "Volume down", Some("mdi:volume-minus")),
+        ] {
+            if !config.is_disabled(id) {
+                entities.push(EntityMeta::button(id, name, None, icon));
+            }
+        }
+    }
+    if config.actions.notify {
+        for (id, name, icon) in [
+            ("notify_message", "Notification", Some("mdi:bell")),
+            (
+                "notify_urgent",
+                "Urgent notification",
+                Some("mdi:bell-alert"),
+            ),
+        ] {
+            if !config.is_disabled(id) {
+                entities.push(EntityMeta::notify(id, name, icon));
+            }
+        }
+    }
+    if config.sensors.mpris {
+        for (id, name, icon) in [
+            (
+                "media_play_pause",
+                "Media play pause",
+                Some("mdi:play-pause"),
+            ),
+            ("media_next", "Media next", Some("mdi:skip-next")),
+            (
+                "media_previous",
+                "Media previous",
+                Some("mdi:skip-previous"),
+            ),
+        ] {
+            if !config.is_disabled(id) {
+                entities.push(EntityMeta::button(id, name, None, icon));
+            }
+        }
     }
     for (id, name, class, icon, enabled) in [
         ("lock", "Lock", None, Some("mdi:lock"), config.actions.lock),
@@ -262,7 +336,15 @@ fn entity_enabled(config: &Config, meta: &EntityMeta) -> bool {
         "active_window_title" => config.sensors.active_window_title,
         "tailscale_running" | "tailscale_ip" => config.sensors.tailscale,
         "wireguard_running" | "wireguard_ip" => config.sensors.wireguard,
-        "lan_ip" => config.sensors.lan_ip,
+        "lan_ip" | "lan_rx" | "lan_tx" => config.sensors.lan_ip,
+        "disk_root_used" | "disk_root_free" | "disk_root_usage" | "disk_home_used"
+        | "disk_home_free" | "disk_home_usage" => config.sensors.disk,
+        "wifi_ssid" | "wifi_signal" => config.sensors.wifi,
+        "online" => config.sensors.online,
+        "volume" | "muted" | "audio_sink" => config.sensors.audio,
+        "media_title" | "media_artist" | "media_playing" => config.sensors.mpris,
+        "battery_present" | "battery_percent" | "battery_charging" | "battery_status"
+        | "battery_health" | "battery_cycles" | "ac_power" => config.sensors.battery,
         _ => true,
     }
 }
@@ -280,14 +362,15 @@ fn static_entities() -> Vec<EntityMeta> {
         ),
         EntityMeta::sensor("os_version", "OS version", None, None, None, None, 0.0),
         EntityMeta::sensor("hostname", "Hostname", None, None, None, None, 0.0),
+        EntityMeta::sensor("chassis", "Chassis", None, None, None, None, 0.0),
         EntityMeta::sensor(
             "uptime",
             "Uptime",
             Some("duration"),
-            Some("s"),
+            Some("h"),
             Some("total_increasing"),
-            Some(0),
-            1.0,
+            Some(1),
+            0.01,
         ),
         EntityMeta::sensor(
             "cpu_usage",
@@ -527,6 +610,128 @@ fn static_entities() -> Vec<EntityMeta> {
         EntityMeta::sensor("lan_ip", "LAN IP", None, None, None, None, 0.0),
         EntityMeta::binary("wireguard_running", "WireGuard running", Some("running")),
         EntityMeta::sensor("wireguard_ip", "WireGuard IP", None, None, None, None, 0.0),
+        EntityMeta::sensor(
+            "disk_root_used",
+            "Disk root used",
+            Some("data_size"),
+            Some("GB"),
+            Some("measurement"),
+            Some(2),
+            0.01,
+        ),
+        EntityMeta::sensor(
+            "disk_root_free",
+            "Disk root free",
+            Some("data_size"),
+            Some("GB"),
+            Some("measurement"),
+            Some(2),
+            0.01,
+        ),
+        EntityMeta::sensor(
+            "disk_root_usage",
+            "Disk root usage",
+            None,
+            Some("%"),
+            Some("measurement"),
+            Some(1),
+            0.5,
+        ),
+        EntityMeta::sensor(
+            "disk_home_used",
+            "Disk home used",
+            Some("data_size"),
+            Some("GB"),
+            Some("measurement"),
+            Some(2),
+            0.01,
+        ),
+        EntityMeta::sensor(
+            "disk_home_free",
+            "Disk home free",
+            Some("data_size"),
+            Some("GB"),
+            Some("measurement"),
+            Some(2),
+            0.01,
+        ),
+        EntityMeta::sensor(
+            "disk_home_usage",
+            "Disk home usage",
+            None,
+            Some("%"),
+            Some("measurement"),
+            Some(1),
+            0.5,
+        ),
+        EntityMeta::binary("battery_present", "Battery present", None),
+        EntityMeta::sensor(
+            "battery_percent",
+            "Battery",
+            Some("battery"),
+            Some("%"),
+            Some("measurement"),
+            Some(0),
+            1.0,
+        ),
+        EntityMeta::binary(
+            "battery_charging",
+            "Battery charging",
+            Some("battery_charging"),
+        ),
+        EntityMeta::binary("ac_power", "AC power", Some("plug")),
+        {
+            let mut meta =
+                EntityMeta::diagnostic_sensor("battery_status", "Battery status", None, None, None);
+            meta.state_class = None;
+            meta
+        },
+        EntityMeta::diagnostic_sensor("battery_health", "Battery health", None, Some("%"), Some(0)),
+        EntityMeta::diagnostic_sensor("battery_cycles", "Battery cycles", None, None, Some(0)),
+        EntityMeta::sensor(
+            "lan_rx",
+            "LAN receive",
+            Some("data_rate"),
+            Some("kB/s"),
+            Some("measurement"),
+            Some(1),
+            1.0,
+        ),
+        EntityMeta::sensor(
+            "lan_tx",
+            "LAN transmit",
+            Some("data_rate"),
+            Some("kB/s"),
+            Some("measurement"),
+            Some(1),
+            1.0,
+        ),
+        EntityMeta::binary("locked", "Locked", Some("lock")),
+        EntityMeta::sensor(
+            "volume",
+            "Volume",
+            None,
+            Some("%"),
+            Some("measurement"),
+            Some(0),
+            1.0,
+        ),
+        EntityMeta::binary("muted", "Muted", None),
+        EntityMeta::sensor("audio_sink", "Audio sink", None, None, None, None, 0.0),
+        EntityMeta::sensor("wifi_ssid", "WiFi SSID", None, None, None, None, 0.0),
+        EntityMeta::sensor(
+            "wifi_signal",
+            "WiFi signal",
+            Some("signal_strength"),
+            Some("dBm"),
+            Some("measurement"),
+            Some(0),
+            1.0,
+        ),
+        EntityMeta::binary("online", "Online", Some("connectivity")),
+        EntityMeta::sensor("media_title", "Media title", None, None, None, None, 0.0),
+        EntityMeta::sensor("media_artist", "Media artist", None, None, None, None, 0.0),
+        EntityMeta::binary("media_playing", "Media playing", Some("running")),
     ]
 }
 
@@ -567,6 +772,11 @@ mod tests {
             .map(|e| e.id)
             .collect();
         assert!(ids.contains(&"cpu_usage".into()));
+        assert!(ids.contains(&"hostname".into()));
+        assert!(ids.contains(&"chassis".into()));
+        assert!(ids.contains(&"battery_present".into()));
+        assert!(ids.contains(&"battery_percent".into()));
+        assert!(ids.contains(&"ac_power".into()));
         assert!(ids.contains(&"discord_running".into()));
         assert!(ids.contains(&"caffeine".into()));
         assert!(ids.contains(&"lock".into()));
@@ -580,6 +790,13 @@ mod tests {
         assert!(ids.contains(&"lan_ip".into()));
         assert!(ids.contains(&"wireguard_running".into()));
         assert!(ids.contains(&"ssh_listening".into()));
+        assert!(ids.contains(&"disk_root_free".into()));
+        assert!(ids.contains(&"mute".into()));
+        assert!(ids.contains(&"do_not_disturb".into()));
+        assert!(ids.contains(&"notify_message".into()));
+        assert!(ids.contains(&"notify_urgent".into()));
+        assert!(!ids.contains(&"notify".into()));
+        assert!(!ids.contains(&"media_play_pause".into()));
         assert!(!ids.contains(&"http_alt_listening".into()));
     }
 

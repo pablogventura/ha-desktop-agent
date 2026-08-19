@@ -408,6 +408,7 @@ dependencies = [
  "anyhow",
  "clap",
  "if-addrs",
+ "libc",
  "nvml-wrapper",
  "rumqttc",
  "serde",

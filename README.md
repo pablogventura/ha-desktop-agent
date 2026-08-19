@@ -6,7 +6,7 @@ The first version targets a modern systemd Linux desktop (Ubuntu, GNOME, Wayland
 
 ## Features (v1)
 
-Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), Tailscale and LAN IPv4 addresses, WireGuard, TCP listeners (SSH/VNC/RDP by default), and an estimated wall-power model you can calibrate.
+Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, chassis type (SMBIOS `/sys/class/dmi/id/chassis_type`: desktop, laptop, ...), session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), Tailscale and LAN IPv4 addresses, WireGuard, TCP listeners (SSH/VNC/RDP by default), disk usage, LAN throughput, Wi-Fi, audio volume, system battery and AC (not mouse/keyboard HID batteries), and an estimated wall-power model you can calibrate.
 
 Actions (allowlisted): lock, suspend, hibernate, shutdown, reboot, and a caffeine switch that takes a logind inhibit lock. Dangerous power actions are off by default.
 
@@ -31,7 +31,11 @@ install -D target/release/ha-desktop-agent ~/.local/bin/ha-desktop-agent
 
 Copy [`config.example.yaml`](config.example.yaml) to `~/.config/ha-desktop-agent/config.yaml` and set the broker host, credentials, and device name.
 
-Network sensors (Linux): Tailscale uses the `tailscale*` interface (or a running `tailscaled` process) and its IPv4. LAN IPv4 is taken from the default-route interface with the lowest metric that is not loopback, docker/veth/bridges, `tun*`, Tailscale, or `wgN`. WireGuard is any `wgN` interface. Listeners are TCP `LISTEN` sockets in `/proc/net/tcp` and `/proc/net/tcp6` for the configured ports.
+Network sensors (Linux): Tailscale uses the `tailscale*` interface (or a running `tailscaled` process) and its IPv4. LAN IPv4 is taken from the default-route interface with the lowest metric that is not loopback, docker/veth/bridges, `tun*`, Tailscale, or `wgN`. WireGuard is any `wgN` interface. Listeners are TCP `LISTEN` sockets in `/proc/net/tcp` and `/proc/net/tcp6` for the configured ports. Missing addresses are published as unavailable (JSON null), not the string `none`.
+
+Chassis is always published from SMBIOS `chassis_type`. Battery and AC adapters use `/sys/class/power_supply` with `sensors.battery` (default on). Only `scope=System` batteries (or `BAT*` / `CMB*` when scope is missing) are used; HID mouse/keyboard packs are ignored. Without a system battery, `battery_present` is off and the other battery sensors are unavailable. Status, health, and cycle count are diagnostic entities.
+
+Audio uses `wpctl` on the default PipeWire sink (`mute`, `volume_up` / `volume_down`). Desktop notifications are two MQTT notify entities on the same device: `notify_message` (normal urgency, respects GNOME Do Not Disturb) and `notify_urgent` (critical urgency, GNOME still shows a banner when DND is on). Use Home Assistant `notify.send_message`. A plain payload is the body; `notify.title` in YAML is the default title. An empty payload uses `notify.body`. Optional JSON `{"title":"...","body":"..."}` (or `message` instead of `body`) is allowed; extra keys are ignored and urgency is never taken from JSON. Title and body are capped at 255 characters. Payloads are passed to D-Bus `Notify` only, never to a shell. GNOME Do Not Disturb is the `do_not_disturb` switch (`gsettings` `org.gnome.desktop.notifications show-banners`; ON means banners off). MPRIS media controls are off unless `sensors.mpris: true`.
 
 ```bash
 chmod 600 ~/.config/ha-desktop-agent/config.yaml
