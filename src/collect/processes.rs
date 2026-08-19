@@ -13,6 +13,14 @@ pub fn collect_processes(proc_root: &Path, monitors: &[ProcessMonitor], snapshot
     }
 }
 
+pub fn ident_contains(proc_root: &Path, needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    running_idents(proc_root)
+        .unwrap_or_default()
+        .iter()
+        .any(|name| name.contains(&needle))
+}
+
 fn running_idents(proc_root: &Path) -> std::io::Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in fs::read_dir(proc_root)? {

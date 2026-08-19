@@ -3,6 +3,27 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_listeners() -> Vec<PortListener> {
+    vec![
+        PortListener {
+            id: "ssh".into(),
+            port: 22,
+        },
+        PortListener {
+            id: "vnc".into(),
+            port: 5900,
+        },
+        PortListener {
+            id: "rdp".into(),
+            port: 3389,
+        },
+    ]
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
@@ -11,6 +32,8 @@ pub struct Config {
     pub poll: PollConfig,
     pub sensors: SensorsConfig,
     pub processes: Vec<ProcessMonitor>,
+    #[serde(default = "default_listeners")]
+    pub listeners: Vec<PortListener>,
     pub actions: ActionsConfig,
     pub commands: Vec<CommandSpec>,
     pub power: PowerConfig,
@@ -33,6 +56,7 @@ impl Default for Config {
                     match_name: "ollama".into(),
                 },
             ],
+            listeners: default_listeners(),
             actions: ActionsConfig::default(),
             commands: Vec::new(),
             power: PowerConfig::default(),
@@ -113,6 +137,12 @@ pub struct SensorsConfig {
     pub estimated_power: bool,
     pub active_application: bool,
     pub active_window_title: bool,
+    #[serde(default = "default_true")]
+    pub tailscale: bool,
+    #[serde(default = "default_true")]
+    pub wireguard: bool,
+    #[serde(default = "default_true")]
+    pub lan_ip: bool,
     /// Entity ids excluded from discovery and collection.
     pub disabled: Vec<String>,
 }
@@ -124,6 +154,9 @@ impl Default for SensorsConfig {
             estimated_power: true,
             active_application: true,
             active_window_title: false,
+            tailscale: true,
+            wireguard: true,
+            lan_ip: true,
             disabled: Vec::new(),
         }
     }
@@ -134,6 +167,12 @@ pub struct ProcessMonitor {
     pub id: String,
     #[serde(rename = "match")]
     pub match_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PortListener {
+    pub id: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -226,6 +265,12 @@ impl Config {
                 anyhow::bail!("process '{}' has empty match", process.id);
             }
         }
+        for listener in &self.listeners {
+            validate_id(&listener.id, "listeners.id")?;
+            if listener.port == 0 {
+                anyhow::bail!("listener '{}' port must be 1-65535", listener.id);
+            }
+        }
         for command in &self.commands {
             validate_id(&command.id, "commands.id")?;
             if command.argv.is_empty() {
@@ -308,5 +353,8 @@ mqtt:
         assert!(config.actions.lock);
         assert!(!config.actions.shutdown);
         assert!(!config.sensors.active_window_title);
+        assert!(config.sensors.tailscale);
+        assert_eq!(config.listeners.len(), 3);
+        assert_eq!(config.listeners[0].id, "ssh");
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::entity::Value;
+use crate::entity::{truncate_ha_state, Value};
 use crate::snapshot::Snapshot;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -281,9 +281,6 @@ async fn session_proxy<'a>(conn: &'a Connection) -> Option<Login1SessionProxy<'a
         .ok()
 }
 
-/// Home Assistant rejects entity states longer than 255 characters.
-const HA_STATE_MAX_CHARS: usize = 255;
-
 fn what_includes_sleep_or_idle(what: &str) -> bool {
     what.split(':')
         .any(|part| part == "sleep" || part == "idle")
@@ -318,16 +315,6 @@ fn format_inhibit_reason(reasons: &[String]) -> String {
         return "none".into();
     }
     truncate_ha_state(&reasons.join("; "))
-}
-
-fn truncate_ha_state(value: &str) -> String {
-    if value.chars().count() <= HA_STATE_MAX_CHARS {
-        return value.to_string();
-    }
-    let keep = HA_STATE_MAX_CHARS.saturating_sub(3);
-    let mut out: String = value.chars().take(keep).collect();
-    out.push_str("...");
-    out
 }
 
 fn unix_now_us() -> u64 {
@@ -376,7 +363,7 @@ mod tests {
     fn truncates_long_reason() {
         let long = "x".repeat(400);
         let text = format_inhibit_reason(&[long]);
-        assert_eq!(text.chars().count(), 255);
+        assert_eq!(text.chars().count(), crate::entity::HA_STATE_MAX_CHARS);
         assert!(text.ends_with("..."));
     }
 }

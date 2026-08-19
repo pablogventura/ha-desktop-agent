@@ -15,5 +15,8 @@ fn golden_device_discovery_contains_expected_components() {
     assert!(payload["cmps"].get("hibernate").is_none());
     assert!(payload["cmps"].get("active_window_title").is_none());
     assert!(payload["dev"]["ids"][0] == "testdevice01");
-    assert!(payload["state_topic"] == "ha-desktop/testdevice01/state");
+    assert!(payload["cmps"]["ssh_listening"]["p"] == "binary_sensor");
+    assert!(payload["cmps"]["tailscale_ip"]["p"] == "sensor");
+    assert!(payload["cmps"]["lan_ip"]["p"] == "sensor");
+    assert!(payload["cmps"].get("http_alt_listening").is_none());
 }

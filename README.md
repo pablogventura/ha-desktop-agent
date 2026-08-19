@@ -6,7 +6,7 @@ The first version targets a modern systemd Linux desktop (Ubuntu, GNOME, Wayland
 
 ## Features (v1)
 
-Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), and an estimated wall-power model you can calibrate.
+Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), Tailscale and LAN IPv4 addresses, WireGuard, TCP listeners (SSH/VNC/RDP by default), and an estimated wall-power model you can calibrate.
 
 Actions (allowlisted): lock, suspend, hibernate, shutdown, reboot, and a caffeine switch that takes a logind inhibit lock. Dangerous power actions are off by default.
 
@@ -30,6 +30,8 @@ install -D target/release/ha-desktop-agent ~/.local/bin/ha-desktop-agent
 ## Configuration
 
 Copy [`config.example.yaml`](config.example.yaml) to `~/.config/ha-desktop-agent/config.yaml` and set the broker host, credentials, and device name.
+
+Network sensors (Linux): Tailscale uses the `tailscale*` interface (or a running `tailscaled` process) and its IPv4. LAN IPv4 is taken from the default-route interface with the lowest metric that is not loopback, docker/veth/bridges, `tun*`, Tailscale, or `wgN`. WireGuard is any `wgN` interface. Listeners are TCP `LISTEN` sockets in `/proc/net/tcp` and `/proc/net/tcp6` for the configured ports.
 
 ```bash
 chmod 600 ~/.config/ha-desktop-agent/config.yaml

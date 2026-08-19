@@ -22,6 +22,9 @@ sensors:
   estimated_power: true
   active_application: true
   active_window_title: false
+  tailscale: true
+  wireguard: true
+  lan_ip: true
   disabled: []
 
 processes:
@@ -29,6 +32,14 @@ processes:
     match: discord
   - id: ollama
     match: ollama
+
+listeners:
+  - id: ssh
+    port: 22
+  - id: vnc
+    port: 5900
+  - id: rdp
+    port: 3389
 
 actions:
   lock: true

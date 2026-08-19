@@ -178,6 +178,17 @@ pub fn enabled_entities(config: &Config) -> Vec<EntityMeta> {
             Some("running"),
         ));
     }
+    for listener in &config.listeners {
+        let id = format!("{}_listening", listener.id);
+        if config.is_disabled(&id) {
+            continue;
+        }
+        entities.push(EntityMeta::binary(
+            &id,
+            &format!("{} listening", title_case(&listener.id)),
+            Some("running"),
+        ));
+    }
     if config.actions.caffeine && !config.is_disabled("caffeine") {
         entities.push(EntityMeta::switch(
             "caffeine",
@@ -249,6 +260,9 @@ fn entity_enabled(config: &Config, meta: &EntityMeta) -> bool {
         "estimated_power" => config.sensors.estimated_power,
         "active_application" => config.sensors.active_application,
         "active_window_title" => config.sensors.active_window_title,
+        "tailscale_running" | "tailscale_ip" => config.sensors.tailscale,
+        "wireguard_running" | "wireguard_ip" => config.sensors.wireguard,
+        "lan_ip" => config.sensors.lan_ip,
         _ => true,
     }
 }
@@ -508,6 +522,11 @@ fn static_entities() -> Vec<EntityMeta> {
         ),
         EntityMeta::binary("user_active", "User active", Some("occupancy")),
         EntityMeta::binary("suspend_inhibited", "Suspend inhibited", None),
+        EntityMeta::binary("tailscale_running", "Tailscale running", Some("running")),
+        EntityMeta::sensor("tailscale_ip", "Tailscale IP", None, None, None, None, 0.0),
+        EntityMeta::sensor("lan_ip", "LAN IP", None, None, None, None, 0.0),
+        EntityMeta::binary("wireguard_running", "WireGuard running", Some("running")),
+        EntityMeta::sensor("wireguard_ip", "WireGuard IP", None, None, None, None, 0.0),
     ]
 }
 
@@ -521,6 +540,19 @@ fn title_case(id: &str) -> String {
 
 pub fn snapshot_json(values: &Map<String, JsonValue>) -> String {
     JsonValue::Object(values.clone()).to_string()
+}
+
+/// Home Assistant rejects entity states longer than 255 characters.
+pub const HA_STATE_MAX_CHARS: usize = 255;
+
+pub fn truncate_ha_state(value: &str) -> String {
+    if value.chars().count() <= HA_STATE_MAX_CHARS {
+        return value.to_string();
+    }
+    let keep = HA_STATE_MAX_CHARS.saturating_sub(3);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push_str("...");
+    out
 }
 
 #[cfg(test)]
@@ -543,5 +575,18 @@ mod tests {
         assert!(!ids.contains(&"active_window_title".into()));
         assert!(ids.contains(&"agent_version".into()));
         assert!(ids.contains(&"dram_power".into()));
+        assert!(ids.contains(&"tailscale_running".into()));
+        assert!(ids.contains(&"tailscale_ip".into()));
+        assert!(ids.contains(&"lan_ip".into()));
+        assert!(ids.contains(&"wireguard_running".into()));
+        assert!(ids.contains(&"ssh_listening".into()));
+        assert!(!ids.contains(&"http_alt_listening".into()));
+    }
+
+    #[test]
+    fn truncates_long_ha_state() {
+        let text = truncate_ha_state(&"x".repeat(400));
+        assert_eq!(text.chars().count(), HA_STATE_MAX_CHARS);
+        assert!(text.ends_with("..."));
     }
 }

@@ -6,6 +6,9 @@ mod processes;
 mod rapl;
 
 #[cfg(target_os = "linux")]
+mod net;
+
+#[cfg(target_os = "linux")]
 pub mod linux_session;
 
 #[cfg(target_os = "windows")]
@@ -65,6 +68,13 @@ impl Collectors {
         }
         self.agent.collect(snapshot);
         processes::collect_processes(Path::new("/proc"), &config.processes, snapshot);
+        #[cfg(target_os = "linux")]
+        net::collect_net(
+            config,
+            snapshot,
+            Path::new("/proc"),
+            Path::new("/sys/class/net"),
+        );
         #[cfg(target_os = "linux")]
         if let Some(session) = &self.session {
             session.collect(config, snapshot).await;
