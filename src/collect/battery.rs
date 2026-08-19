@@ -21,7 +21,7 @@ pub fn collect_power_supply(power_root: &Path, snapshot: &mut Snapshot) {
         Some(list) => list,
         None => {
             set_battery_unavailable(snapshot);
-            snapshot.set("ac_power", Value::Unavailable);
+            snapshot.set("ac_power", infer_ac_without_adapter(snapshot));
             return;
         }
     };
@@ -52,7 +52,7 @@ pub fn collect_power_supply(power_root: &Path, snapshot: &mut Snapshot) {
 
     match ac_online {
         Some(on) => snapshot.set("ac_power", Value::Bool(on)),
-        None => snapshot.set("ac_power", Value::Unavailable),
+        None => snapshot.set("ac_power", infer_ac_without_adapter(snapshot)),
     }
 
     batteries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
@@ -109,13 +109,21 @@ pub fn is_system_battery(name: &str, kind: &str, scope: Option<&str>) -> bool {
         return scope.eq_ignore_ascii_case("System");
     }
     let lower = name.to_ascii_lowercase();
-    if lower.starts_with("hidpp")
-        || lower.starts_with("mouse")
-        || lower.contains("ps-controller")
-    {
+    if lower.starts_with("hidpp") || lower.starts_with("mouse") || lower.contains("ps-controller") {
         return false;
     }
     lower.starts_with("bat") || lower.starts_with("cmb")
+}
+
+fn infer_ac_without_adapter(snapshot: &Snapshot) -> Value {
+    match snapshot.get("chassis") {
+        Some(Value::Text(kind)) if chassis_is_mains_powered(kind) => Value::Bool(true),
+        _ => Value::Unavailable,
+    }
+}
+
+fn chassis_is_mains_powered(kind: &str) -> bool {
+    matches!(kind, "desktop" | "server" | "all_in_one")
 }
 
 fn is_ac_adapter(kind: &str) -> bool {
@@ -219,6 +227,18 @@ mod tests {
         assert_eq!(snapshot.get("battery_present"), Some(&Value::Bool(false)));
         assert_eq!(snapshot.get("battery_percent"), Some(&Value::Unavailable));
         assert_eq!(snapshot.get("ac_power"), Some(&Value::Unavailable));
+    }
+
+    #[test]
+    fn desktop_without_mains_sysfs_is_on_ac() {
+        let mut snapshot = Snapshot::default();
+        collect_chassis(
+            &fixture_root("dmi/desktop").join("chassis_type"),
+            &mut snapshot,
+        );
+        collect_power_supply(&fixture_root("power_supply/hidpp_only"), &mut snapshot);
+        assert_eq!(snapshot.get("ac_power"), Some(&Value::Bool(true)));
+        assert_eq!(snapshot.get("battery_present"), Some(&Value::Bool(false)));
     }
 
     #[test]

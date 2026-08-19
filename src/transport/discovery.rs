@@ -111,6 +111,12 @@ pub fn discovery_payload_with_entities(
     })
 }
 
+fn mqtt_bool_template(entity_id: &str) -> String {
+    format!(
+        "{{% if value_json.{entity_id} is boolean %}}{{{{ 'ON' if value_json.{entity_id} else 'OFF' }}}}{{% endif %}}"
+    )
+}
+
 fn component(config: &Config, device_id: &str, slug: &str, entity: &EntityMeta) -> Value {
     let mut map = Map::new();
     map.insert("p".into(), Value::String(entity.kind.platform().into()));
@@ -159,10 +165,7 @@ fn component(config: &Config, device_id: &str, slug: &str, entity: &EntityMeta) 
             );
             map.insert(
                 "value_template".into(),
-                Value::String(format!(
-                    "{{{{ 'ON' if value_json.{id} else 'OFF' }}}}",
-                    id = entity.id
-                )),
+                Value::String(mqtt_bool_template(&entity.id)),
             );
         }
         EntityKind::Switch => {
@@ -176,10 +179,7 @@ fn component(config: &Config, device_id: &str, slug: &str, entity: &EntityMeta) 
             );
             map.insert(
                 "value_template".into(),
-                Value::String(format!(
-                    "{{{{ 'ON' if value_json.{id} else 'OFF' }}}}",
-                    id = entity.id
-                )),
+                Value::String(mqtt_bool_template(&entity.id)),
             );
             map.insert("payload_on".into(), Value::String("ON".into()));
             map.insert("payload_off".into(), Value::String("OFF".into()));
@@ -243,6 +243,10 @@ mod tests {
         assert_eq!(payload["cmps"]["cpu_usage"]["p"], "sensor");
         assert_eq!(payload["cmps"]["caffeine"]["p"], "switch");
         assert_eq!(payload["cmps"]["lock"]["p"], "button");
+        assert!(payload["cmps"]["ac_power"]["value_template"]
+            .as_str()
+            .unwrap()
+            .contains("is boolean"));
         assert_eq!(payload["cmps"]["notify_message"]["p"], "notify");
         assert_eq!(payload["cmps"]["notify_urgent"]["p"], "notify");
         assert!(payload["cmps"].get("notify").is_none());
