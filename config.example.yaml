@@ -1,0 +1,55 @@
+device:
+  name: desktop
+  # id: null  # default: first 12 chars of /etc/machine-id
+
+mqtt:
+  host: homeassistant.local
+  port: 1883
+  username: null
+  password: null
+  tls: false
+  discovery_prefix: homeassistant
+  topic_prefix: ha-desktop
+
+poll:
+  fast_ms: 2000
+  slow_ms: 10000
+  idle_threshold_s: 60
+  force_publish_s: 60
+
+sensors:
+  gpu: true
+  estimated_power: true
+  active_application: true
+  active_window_title: false
+  disabled: []
+
+processes:
+  - id: discord
+    match: discord
+  - id: ollama
+    match: ollama
+
+actions:
+  lock: true
+  suspend: true
+  hibernate: false
+  shutdown: false
+  reboot: false
+  caffeine: true
+
+# Only argv registered here can be executed. Never interpolated from MQTT.
+commands: []
+# - id: start_ollama
+#   name: Start Ollama
+#   argv: ["/usr/bin/systemctl", "--user", "start", "ollama"]
+
+power:
+  idle_w: 30
+  coefficients:
+    cpu_package_w: 1.0
+    dram_w: 1.0
+    gpu_w: 1.0
+    cpu_usage: 0.0
+    gpu_usage: 0.0
+  log_csv: null

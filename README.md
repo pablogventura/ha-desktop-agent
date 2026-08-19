@@ -1,0 +1,81 @@
+# ha-desktop-agent
+
+Background agent that exposes a Linux (and later Windows) desktop to [Home Assistant](https://www.home-assistant.io/) as **one MQTT device**. Telemetry is collected locally, normalized into a stable entity model, and published with MQTT Discovery. Commands are allowlisted in configuration; MQTT payloads are never executed as a shell.
+
+The first version targets a modern systemd Linux desktop (Ubuntu, GNOME, Wayland) with optional NVIDIA GPUs.
+
+## Features (v1)
+
+Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), and an estimated wall-power model you can calibrate.
+
+Actions (allowlisted): lock, suspend, hibernate, shutdown, reboot, and a caffeine switch that takes a logind inhibit lock. Dangerous power actions are off by default.
+
+## Requirements
+
+- Linux with systemd and a user graphical session
+- MQTT broker reachable from the desktop (the Home Assistant Mosquitto add-on is fine)
+- Home Assistant MQTT integration with discovery enabled (device discovery, HA 2024.8+)
+- Optional: NVIDIA driver (`libnvidia-ml.so`)
+- Optional: [Focused Window D-Bus](https://extensions.gnome.org/extension/5592/focused-window-d-bus/) for the active application on GNOME Wayland
+
+Run the agent as the logged-in user (`systemd --user`). A system-wide root service cannot see the GNOME session bus.
+
+## Build
+
+```bash
+cargo build --release
+install -D target/release/ha-desktop-agent ~/.local/bin/ha-desktop-agent
+```
+
+## Configuration
+
+Copy [`config.example.yaml`](config.example.yaml) to `~/.config/ha-desktop-agent/config.yaml` and set the broker host, credentials, and device name.
+
+```bash
+chmod 600 ~/.config/ha-desktop-agent/config.yaml
+ha-desktop-agent validate --config ~/.config/ha-desktop-agent/config.yaml
+```
+
+Password can also come from `HA_DESKTOP_MQTT_PASSWORD`. TLS is optional (`mqtt.tls: true`). Custom commands must be listed as fixed `argv` arrays; the agent never interpolates MQTT payloads into a shell.
+
+### Power model
+
+```text
+estimated_w = idle_w + sum(coefficient[k] * feature[k])
+```
+
+Features: `cpu_package_w`, `dram_w`, `gpu_w`, `cpu_usage`, `gpu_usage`. Missing features count as zero. Set `power.log_csv` to record timestamps and features while you measure the PC with an external meter, then paste new coefficients back into YAML.
+
+### RAPL permissions
+
+CPU/DRAM watts come from `/sys/class/powercap`. Many distros restrict those files. If `cpu_power` / `dram_power` stay unavailable, either skip them in the model or grant read access with a udev/sysfs rule. The agent does not run as root to work around this.
+
+## systemd --user
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/ha-desktop-agent.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now ha-desktop-agent.service
+```
+
+The unit starts after `graphical-session.target`.
+
+## MQTT layout
+
+- Discovery (retained): `homeassistant/device/<device_id>/config`
+- Availability + LWT: `ha-desktop/<device_id>/availability` (`online` / `offline`)
+- State JSON: `ha-desktop/<device_id>/state`
+- Commands: `ha-desktop/<device_id>/command/<entity_id>`
+
+`device_id` defaults to the first 12 characters of `/etc/machine-id`.
+
+## Safety
+
+- Shutdown, reboot, and hibernate are disabled until you set them to `true`
+- Only registered actions and `commands:` entries can run
+- Prefer a dedicated MQTT user with ACL limited to this device prefix
+
+## License
+
+MIT
