@@ -1,8 +1,8 @@
 !ifndef VERSION
-  !define VERSION "0.1.0"
+  !error "VERSION must be passed: makensis -DVERSION=X.Y.Z (Makefile reads Cargo.toml)"
 !endif
 !ifndef EXE_PATH
-  !define EXE_PATH "..\..\target\x86_64-pc-windows-gnu\release\ha-desktop-agent.exe"
+  !error "EXE_PATH must be passed to the Windows release exe"
 !endif
 
 Name "ha-desktop-agent"
@@ -12,34 +12,61 @@ RequestExecutionLevel admin
 Unicode true
 SetCompressor lzma
 
+; Interactive UI when launched from Explorer; /S skips pages.
 Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
 
+!macro StopAndRemoveService
+  nsExec::ExecToLog 'sc.exe stop ha-desktop-agent'
+  Pop $0
+  nsExec::ExecToLog 'sc.exe delete ha-desktop-agent'
+  Pop $0
+  ; Give SCM a moment before recreate (silent installs over remote shells).
+  Sleep 1000
+!macroend
+
 Section "Install"
   SetOutPath "$INSTDIR"
   File "/oname=ha-desktop-agent.exe" "${EXE_PATH}"
   File "/oname=config.example.yaml" "..\..\config.example.yaml"
+  File "/oname=install.ps1" "install.ps1"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
-  CreateDirectory "$PROGRAMDATA\ha-desktop-agent"
-  IfFileExists "$PROGRAMDATA\ha-desktop-agent\config.yaml" skip_config
-    CopyFiles /SILENT "$INSTDIR\config.example.yaml" "$PROGRAMDATA\ha-desktop-agent\config.yaml"
+  ReadEnvStr $0 PROGRAMDATA
+  StrCmp $0 "" 0 +2
+    StrCpy $0 "C:\ProgramData"
+  CreateDirectory "$0\ha-desktop-agent"
+  IfFileExists "$0\ha-desktop-agent\config.yaml" skip_config
+    CopyFiles /SILENT "$INSTDIR\config.example.yaml" "$0\ha-desktop-agent\config.yaml"
   skip_config:
 
-  ExecWait 'sc.exe create ha-desktop-agent binPath= "$INSTDIR\ha-desktop-agent.exe service" start= auto DisplayName= "Home Assistant desktop agent"'
-  ExecWait 'sc.exe description ha-desktop-agent "MQTT desktop agent for Home Assistant"'
-  ExecWait 'sc.exe start ha-desktop-agent'
-  ExecWait 'schtasks.exe /Create /TN ha-desktop-agent-session /TR "$INSTDIR\ha-desktop-agent.exe session" /SC ONLOGON /RL LIMITED /F'
+  !insertmacro StopAndRemoveService
+  nsExec::ExecToLog 'sc.exe create ha-desktop-agent binPath= "$INSTDIR\ha-desktop-agent.exe service" start= auto DisplayName= "Home Assistant desktop agent"'
+  Pop $0
+  nsExec::ExecToLog 'sc.exe description ha-desktop-agent "MQTT desktop agent for Home Assistant"'
+  Pop $0
+  nsExec::ExecToLog 'sc.exe start ha-desktop-agent'
+  Pop $0
+
+  nsExec::ExecToLog 'schtasks.exe /Create /TN ha-desktop-agent-session /TR "\"$INSTDIR\ha-desktop-agent.exe\" session" /SC ONLOGON /RL LIMITED /F'
+  Pop $0
+  ; Start the session helper now (ONLOGON alone leaves session entities unavailable until next logon).
+  nsExec::ExecToLog 'schtasks.exe /Run /TN ha-desktop-agent-session'
+  Pop $0
 SectionEnd
 
 Section "Uninstall"
-  ExecWait 'sc.exe stop ha-desktop-agent'
-  ExecWait 'sc.exe delete ha-desktop-agent'
-  ExecWait 'schtasks.exe /Delete /TN ha-desktop-agent-session /F'
+  nsExec::ExecToLog 'sc.exe stop ha-desktop-agent'
+  Pop $0
+  nsExec::ExecToLog 'sc.exe delete ha-desktop-agent'
+  Pop $0
+  nsExec::ExecToLog 'schtasks.exe /Delete /TN ha-desktop-agent-session /F'
+  Pop $0
   Delete "$INSTDIR\ha-desktop-agent.exe"
   Delete "$INSTDIR\config.example.yaml"
+  Delete "$INSTDIR\install.ps1"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 SectionEnd

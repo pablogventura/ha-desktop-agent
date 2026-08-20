@@ -1,5 +1,6 @@
 #![cfg(target_os = "windows")]
 
+mod hw;
 mod machine;
 mod pipe;
 mod service;
@@ -35,9 +36,6 @@ impl WindowsCollectors {
         self.machine.collect(config, snapshot);
         snapshot.set("cpu_power", Value::Unavailable);
         snapshot.set("dram_power", Value::Unavailable);
-        if config.sensors.dnd {
-            snapshot.set("do_not_disturb", Value::Unavailable);
-        }
         fill_session_defaults(config, snapshot);
         let session = self.session.lock().unwrap();
         for (key, value) in session.iter() {
@@ -54,6 +52,10 @@ fn fill_session_defaults(config: &Config, snapshot: &mut Snapshot) {
     snapshot.set("locked", Value::Unavailable);
     snapshot.set("caffeine", Value::Bool(false));
     snapshot.set("suspend_inhibited", Value::Unavailable);
+    snapshot.set("suspend_inhibit_reason", Value::Unavailable);
+    if config.sensors.dnd {
+        snapshot.set("do_not_disturb", Value::Unavailable);
+    }
     if config.sensors.audio {
         snapshot.set("volume", Value::Unavailable);
         snapshot.set("muted", Value::Unavailable);

@@ -1,15 +1,13 @@
 use crate::config::Config;
-use crate::entity::{truncate_ha_state, Value};
+use crate::entity::truncate_ha_state;
 use crate::ipc::{IpcMessage, IpcValue};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use windows::core::w;
 use windows::core::{Interface, Result as WinResult, HSTRING};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, MAX_PATH};
-use windows::Win32::Media::Audio::{
-    eMultimedia, eRender, IAudioEndpointVolume, IMMDeviceEnumerator, MMDeviceEnumerator,
-};
+use windows::Win32::Foundation::{CloseHandle, HWND, MAX_PATH};
+use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
@@ -18,7 +16,7 @@ use windows::Win32::System::Power::{
 };
 use windows::Win32::System::Shutdown::LockWorkStation;
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_SWITCHDESKTOP,
+    CloseDesktop, OpenInputDesktop, SwitchDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_SWITCHDESKTOP,
 };
 use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
@@ -56,11 +54,26 @@ pub fn collect_session(config: &Config, state: &SessionState) -> HashMap<String,
     let caffeine = state.caffeine.load(Ordering::Relaxed);
     values.insert("caffeine".into(), IpcValue::Bool(caffeine));
     values.insert("suspend_inhibited".into(), IpcValue::Bool(caffeine));
+    if caffeine {
+        values.insert(
+            "suspend_inhibit_reason".into(),
+            IpcValue::Text("caffeine".into()),
+        );
+    } else {
+        values.insert("suspend_inhibit_reason".into(), IpcValue::Null);
+    }
     values.insert("session_type".into(), IpcValue::Text("windows".into()));
     values.insert(
         "desktop_environment".into(),
         IpcValue::Text("Windows".into()),
     );
+
+    if config.sensors.dnd {
+        match focus_assist_on() {
+            Some(on) => values.insert("do_not_disturb".into(), IpcValue::Bool(on)),
+            None => values.insert("do_not_disturb".into(), IpcValue::Null),
+        };
+    }
 
     match idle_seconds() {
         Some(seconds) => {
@@ -188,6 +201,93 @@ pub fn handle_rpc(state: &SessionState, msg: &IpcMessage) -> IpcMessage {
     }
 }
 
+fn focus_assist_on() -> Option<bool> {
+    // Quiet Hours / Focus Assist cloudstore blob (best-effort; layout varies by build).
+    const PATHS: &[&str] = &[
+        r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.notifications.quiethourssettings\windows.data.notifications.quiethourssettings",
+        r"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\windows.data.notifications.quiethourssettings\windows.data.notifications.quiethourssettings",
+    ];
+    for path in PATHS {
+        if let Some(on) = quiet_hours_from_registry(path) {
+            return Some(on);
+        }
+    }
+    None
+}
+
+fn quiet_hours_from_registry(subkey: &str) -> Option<bool> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::ERROR_SUCCESS;
+    use windows::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY,
+    };
+    let sub = HSTRING::from(subkey);
+    let name = HSTRING::from("Data");
+    let mut size = 0u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &sub,
+            &name,
+            RRF_RT_REG_BINARY,
+            None,
+            None,
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_SUCCESS || size == 0 || size > 4096 {
+        return None;
+    }
+    let mut buf = vec![0u8; size as usize];
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &sub,
+            &name,
+            RRF_RT_REG_BINARY,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    buf.truncate(size as usize);
+    parse_quiet_hours_profile(&buf).map(|mode| mode != 0)
+}
+
+/// Quiet Hours profile in the CloudStore blob: 0=off, 1=priority, 2=alarms-only.
+fn parse_quiet_hours_profile(data: &[u8]) -> Option<u8> {
+    for &idx in &[20usize, 24, 16, 18] {
+        if let Some(&mode) = data.get(idx) {
+            if mode <= 2 {
+                return Some(mode);
+            }
+        }
+    }
+    data.iter().rev().find(|&&b| b <= 2).copied()
+}
+
+#[cfg(test)]
+mod quiet_hours_tests {
+    use super::parse_quiet_hours_profile;
+
+    #[test]
+    fn reads_profile_at_offset_20() {
+        let mut data = vec![0xff; 32];
+        data[20] = 1;
+        assert_eq!(parse_quiet_hours_profile(&data), Some(1));
+    }
+
+    #[test]
+    fn off_profile_is_zero() {
+        let mut data = vec![0xff; 32];
+        data[20] = 0;
+        assert_eq!(parse_quiet_hours_profile(&data), Some(0));
+    }
+}
+
 fn idle_seconds() -> Option<f64> {
     let mut info = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
@@ -203,7 +303,8 @@ fn idle_seconds() -> Option<f64> {
 
 fn workstation_locked() -> Option<bool> {
     unsafe {
-        let desktop = OpenInputDesktop(0, false, DESKTOP_SWITCHDESKTOP).ok()?;
+        let desktop =
+            OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_SWITCHDESKTOP).ok()?;
         let switched = SwitchDesktop(desktop).is_ok();
         let _ = CloseDesktop(desktop);
         Some(!switched)
@@ -222,10 +323,8 @@ fn audio_endpoint() -> WinResult<IAudioEndpointVolume> {
 fn audio_state() -> anyhow::Result<(f64, bool, Option<String>)> {
     unsafe {
         let volume = audio_endpoint()?;
-        let mut scalar = 0f32;
-        volume.GetMasterVolumeLevelScalar(&mut scalar)?;
-        let mut muted = windows::Win32::Foundation::BOOL(0);
-        volume.GetMute(&mut muted)?;
+        let scalar = volume.GetMasterVolumeLevelScalar()?;
+        let muted = volume.GetMute()?;
         Ok((
             (f64::from(scalar) * 100.0).clamp(0.0, 100.0),
             muted.as_bool(),
@@ -244,8 +343,7 @@ fn set_muted(muted: bool) -> anyhow::Result<()> {
 fn bump_volume(delta: i32) -> anyhow::Result<()> {
     unsafe {
         let endpoint = audio_endpoint()?;
-        let mut scalar = 0f32;
-        endpoint.GetMasterVolumeLevelScalar(&mut scalar)?;
+        let scalar = endpoint.GetMasterVolumeLevelScalar()?;
         let next = (scalar + delta as f32 / 100.0).clamp(0.0, 1.0);
         endpoint.SetMasterVolumeLevelScalar(next, std::ptr::null())?;
     }
@@ -377,16 +475,15 @@ fn smtc_action(action: &str) -> anyhow::Result<()> {
     use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
     let manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?.get()?;
     let session = manager.GetCurrentSession()?;
-    let controls = session.GetPlaybackInfo()?.Controls()?;
     match action {
         "media_play_pause" => {
-            let _ = controls.TryTogglePlayPauseAsync()?.get()?;
+            let _ = session.TryTogglePlayPauseAsync()?.get()?;
         }
         "media_next" => {
-            let _ = controls.TrySkipNextAsync()?.get()?;
+            let _ = session.TrySkipNextAsync()?.get()?;
         }
         "media_previous" => {
-            let _ = controls.TrySkipPreviousAsync()?.get()?;
+            let _ = session.TrySkipPreviousAsync()?.get()?;
         }
         other => anyhow::bail!("unknown mpris action {other}"),
     }

@@ -74,7 +74,7 @@ User config lives at `~/.config/ha-desktop-agent/config.yaml` (`chmod 600`) on L
 - Notify: MQTT entities `notify_message` (normal) and `notify_urgent` (critical); no notify **button**. Payload is D-Bus `Notify` on Linux or WinRT toast on Windows (plain text or JSON `title`/`body`/`message`). Urgency comes from the entity id, not JSON
 - Lock: GNOME/Freedesktop `ScreenSaver.Lock` first; logind `LockSession` only on a **user** seat session, not systemd `--user` `manager`. Windows: session helper `LockWorkStation`
 - Chassis: always from DMI `chassis_type` (Linux) or SMBIOS via `GetSystemFirmwareTable` (Windows). Battery: `sensors.battery`; System/`BAT*` only, skip `hidpp*` Device packs. Desktop with no Mains sysfs: `ac_power` true. Windows uses `GetSystemPowerStatus`
-- Windows: MQTT lives in the service; session helper talks over a named pipe. Do not add `do_not_disturb` on Windows. RAPL stays Unavailable.
+- Windows: MQTT lives in the service; session helper talks over a named pipe. Focus Assist (`do_not_disturb`) is read-only on Windows. RAPL stays Unavailable. `os_version` / `cpu_frequency` from Win32; `cpu_temperature` best-effort WMI.
 
 ## Tests
 

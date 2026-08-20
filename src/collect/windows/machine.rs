@@ -18,20 +18,22 @@ use windows::Win32::NetworkManagement::IpHelper::{
 use windows::Win32::NetworkManagement::WiFi::{
     wlan_intf_opcode_current_connection, WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory,
     WlanOpenHandle, WlanQueryInterface, WLAN_CONNECTION_ATTRIBUTES, WLAN_INTERFACE_INFO_LIST,
+    WLAN_OPCODE_VALUE_TYPE,
 };
 use windows::Win32::Networking::WinSock::AF_INET;
-use windows::Win32::Storage::FileSystem::GetSystemFirmwareTable;
-use windows::Win32::System::Power::SetSuspendState;
+use windows::Win32::System::Power::{GetSystemPowerStatus, SetSuspendState, SYSTEM_POWER_STATUS};
 use windows::Win32::System::ProcessStatus::{K32EnumProcesses, K32GetProcessImageFileNameW};
 use windows::Win32::System::Shutdown::{
     InitiateShutdownW, LockWorkStation, SHTDN_REASON_MAJOR_OTHER, SHUTDOWN_FORCE_OTHERS,
     SHUTDOWN_POWEROFF, SHUTDOWN_RESTART,
 };
 use windows::Win32::System::SystemInformation::{
-    GetComputerNameW, GetSystemPowerStatus, GetSystemTimes, GetTickCount64, GlobalMemoryStatusEx,
-    MEMORYSTATUSEX, SYSTEM_POWER_STATUS,
+    GetSystemFirmwareTable, GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX, RSMB,
 };
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{
+    GetSystemTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::System::WindowsProgramming::GetComputerNameW;
 
 #[derive(Default)]
 pub struct WindowsMachine {
@@ -43,9 +45,11 @@ impl WindowsMachine {
     pub fn collect(&mut self, config: &Config, snapshot: &mut Snapshot) {
         self.collect_identity(snapshot);
         self.collect_cpu_mem(snapshot);
+        super::hw::collect_os_version(snapshot);
+        super::hw::collect_cpu_frequency(snapshot);
+        super::hw::collect_cpu_temperature(snapshot);
         snapshot.set("cpu_power", Value::Unavailable);
         snapshot.set("dram_power", Value::Unavailable);
-        snapshot.set("cpu_temperature", Value::Unavailable);
         if config.sensors.battery {
             collect_battery(snapshot);
         }
@@ -72,7 +76,7 @@ fn collect_identity(snapshot: &mut Snapshot) {
     if let Some(name) = computer_name() {
         snapshot.set("hostname", Value::Text(name));
     }
-    let hours = GetTickCount64() as f64 / 3_600_000.0;
+    let hours = unsafe { GetTickCount64() } as f64 / 3_600_000.0;
     snapshot.set("uptime", Value::Number(hours));
     match read_chassis() {
         Some(chassis) => snapshot.set("chassis", Value::Text(chassis.to_string())),
@@ -156,13 +160,12 @@ fn computer_name() -> Option<String> {
 }
 
 fn read_chassis() -> Option<&'static str> {
-    let signature = u32::from_le_bytes(*b"RSMB");
-    let size = unsafe { GetSystemFirmwareTable(signature, 0, None) };
+    let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
     if size == 0 {
         return None;
     }
     let mut buf = vec![0u8; size as usize];
-    let written = unsafe { GetSystemFirmwareTable(signature, 0, Some(&mut buf)) };
+    let written = unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut buf)) };
     if written == 0 {
         return None;
     }
@@ -183,10 +186,10 @@ fn collect_battery(snapshot: &mut Snapshot) {
         battery_percent: status.BatteryLifePercent,
     };
     let chassis = snapshot.get("chassis").and_then(|v| match v {
-        Value::Text(text) => Some(text.as_str()),
+        Value::Text(text) => Some(text.clone()),
         _ => None,
     });
-    apply_system_power_status(snapshot, parsed, chassis);
+    apply_system_power_status(snapshot, parsed, chassis.as_deref());
 }
 
 fn collect_processes(config: &Config, snapshot: &mut Snapshot) {
@@ -202,7 +205,7 @@ pub fn process_image_names() -> Vec<String> {
     let mut pids = vec![0u32; 4096];
     let mut needed = 0u32;
     unsafe {
-        if K32EnumProcesses(pids.as_mut_ptr(), (pids.len() * 4) as u32, &mut needed).is_err() {
+        if !K32EnumProcesses(pids.as_mut_ptr(), (pids.len() * 4) as u32, &mut needed).as_bool() {
             return Vec::new();
         }
     }
@@ -355,7 +358,7 @@ fn sample_lan_rates(
 fn adapter_octets(name: &str) -> Option<(u64, u64)> {
     unsafe {
         let mut table = std::ptr::null_mut();
-        GetIfTable2(&mut table).ok()?;
+        GetIfTable2(&mut table).ok().ok()?;
         if table.is_null() {
             return None;
         }
@@ -385,13 +388,13 @@ fn collect_wifi(snapshot: &mut Snapshot) {
     unsafe {
         let mut handle = Default::default();
         let mut version = 0u32;
-        if WlanOpenHandle(2, None, &mut version, &mut handle).is_err() {
+        if WlanOpenHandle(2, None, &mut version, &mut handle) != 0 {
             snapshot.set("wifi_ssid", Value::Unavailable);
             snapshot.set("wifi_signal", Value::Unavailable);
             return;
         }
         let mut list: *mut WLAN_INTERFACE_INFO_LIST = std::ptr::null_mut();
-        if WlanEnumInterfaces(handle, None, &mut list).is_err() || list.is_null() {
+        if WlanEnumInterfaces(handle, None, &mut list) != 0 || list.is_null() {
             let _ = WlanCloseHandle(handle, None);
             snapshot.set("wifi_ssid", Value::Unavailable);
             snapshot.set("wifi_signal", Value::Unavailable);
@@ -402,7 +405,7 @@ fn collect_wifi(snapshot: &mut Snapshot) {
         if info_list.dwNumberOfItems > 0 {
             let iface = &info_list.InterfaceInfo[0];
             let mut data_size = 0u32;
-            let mut opcode = 0u32;
+            let mut opcode = WLAN_OPCODE_VALUE_TYPE(0);
             let mut data = std::ptr::null_mut();
             if WlanQueryInterface(
                 handle,
@@ -411,9 +414,8 @@ fn collect_wifi(snapshot: &mut Snapshot) {
                 None,
                 &mut data_size,
                 &mut data,
-                Some(&mut opcode),
-            )
-            .is_ok()
+                Some(&mut opcode as *mut _),
+            ) == 0
                 && !data.is_null()
             {
                 let conn = &*(data as *const WLAN_CONNECTION_ATTRIBUTES);
@@ -429,8 +431,10 @@ fn collect_wifi(snapshot: &mut Snapshot) {
                 } else {
                     snapshot.set("wifi_ssid", Value::Text(truncate_ha_state(&ssid)));
                 }
-                let signal = f64::from(conn.wlanAssociationAttributes.wlanSignalQuality);
-                snapshot.set("wifi_signal", Value::Number(signal.min(100.0)));
+                // wlanSignalQuality is 0-100; match Linux NM Strength -> dBm.
+                let quality = f64::from(conn.wlanAssociationAttributes.wlanSignalQuality)
+                    .clamp(0.0, 100.0);
+                snapshot.set("wifi_signal", Value::Number(quality - 100.0));
                 found = true;
                 WlanFreeMemory(data);
             }
@@ -474,7 +478,7 @@ fn initiate_shutdown(reboot: bool) -> anyhow::Result<()> {
         } else {
             SHUTDOWN_POWEROFF
         };
-    unsafe {
+    let status = unsafe {
         InitiateShutdownW(
             PCWSTR::null(),
             PCWSTR::null(),
@@ -482,6 +486,9 @@ fn initiate_shutdown(reboot: bool) -> anyhow::Result<()> {
             flags,
             SHTDN_REASON_MAJOR_OTHER,
         )
-        .map_err(|err| anyhow::anyhow!("InitiateShutdownW failed: {err}"))
+    };
+    if status != 0 {
+        anyhow::bail!("InitiateShutdownW failed: {status}");
     }
+    Ok(())
 }

@@ -15,19 +15,20 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
-use windows::Win32::Security::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, PSECURITY_DESCRIPTOR, SDDL_REVISION_1,
-    SECURITY_ATTRIBUTES,
+use windows::Win32::Foundation::{
+    LocalFree, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
+use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    OPEN_EXISTING,
+    OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
-use windows::Win32::System::Memory::LocalFree;
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, PeekNamedPipe, PIPE_ACCESS_DUPLEX, PIPE_READMODE_BYTE,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 
 const PIPE_BUFFER: u32 = 64 * 1024;
