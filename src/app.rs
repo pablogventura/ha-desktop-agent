@@ -185,6 +185,7 @@ async fn mqtt_loop(
             }
         }
     }
+    mqtt.graceful_disconnect().await;
     Ok(())
 }
 
