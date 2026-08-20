@@ -820,8 +820,10 @@ mod tests {
         assert!(ids.contains(&"discord_running".into()));
         assert!(ids.contains(&"caffeine".into()));
         assert!(ids.contains(&"lock".into()));
-        assert!(!ids.contains(&"shutdown".into()));
-        assert!(!ids.contains(&"hibernate".into()));
+        assert!(ids.contains(&"shutdown".into()));
+        assert!(ids.contains(&"hibernate".into()));
+        assert!(ids.contains(&"reboot".into()));
+        assert!(ids.contains(&"media_play_pause".into()));
         assert!(ids.contains(&"active_window_title".into()));
         assert!(ids.contains(&"agent_version".into()));
         assert!(ids.contains(&"dram_power".into()));
@@ -836,7 +838,6 @@ mod tests {
         assert!(ids.contains(&"notify_message".into()));
         assert!(ids.contains(&"notify_urgent".into()));
         assert!(!ids.contains(&"notify".into()));
-        assert!(!ids.contains(&"media_play_pause".into()));
         assert!(!ids.contains(&"http_alt_listening".into()));
         assert!(ids.contains(&"update_available".into()));
         assert!(ids.contains(&"update_latest_version".into()));

@@ -70,7 +70,7 @@ User config lives at `~/.config/ha-desktop-agent/config.yaml` (`chmod 600`) on L
 - Binary MQTT: only map JSON **booleans** to ON/OFF; `null` must stay unknown, not OFF
 - New MQTT entities: add to `enabled_entities` / `static_entities`, collect every poll tick (do not omit keys on fast ticks)
 - Linux-only modules behind `cfg(target_os = "linux")`
-- Power actions `shutdown` / `reboot` / `hibernate` stay **off** unless config enables them
+- Power actions `shutdown` / `reboot` / `hibernate` are on by default; set them `false` in YAML to disable
 - Notify: MQTT entities `notify_message` (normal) and `notify_urgent` (critical); no notify **button**. Payload is D-Bus `Notify` on Linux or WinRT toast on Windows (plain text or JSON `title`/`body`/`message`). Urgency comes from the entity id, not JSON
 - Lock: GNOME/Freedesktop `ScreenSaver.Lock` first; logind `LockSession` only on a **user** seat session, not systemd `--user` `manager`. Windows: session helper `LockWorkStation`
 - Chassis: always from DMI `chassis_type` (Linux) or SMBIOS via `GetSystemFirmwareTable` (Windows). Battery: `sensors.battery`; System/`BAT*` only, skip `hidpp*` Device packs. Desktop with no Mains sysfs: `ac_power` true. Windows uses `GetSystemPowerStatus`
@@ -96,6 +96,5 @@ No live MQTT/broker required for tests. Do not lock the live session or send `no
 - Walk sysfs RAPL or `power_supply` via generic directory recursion (`device` symlinks loop)
 - Treat logind `delay` inhibitors as suspend blocks (only `block` / `block-weak`)
 - Count HID mouse/keyboard batteries as the laptop pack
-- Default-enable `sensors.mpris` (media metadata is sensitive)
 - Default-listen on port 8080
 - Duplicate README feature lists here; keep this file operational

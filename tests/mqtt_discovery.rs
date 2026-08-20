@@ -13,7 +13,9 @@ fn golden_device_discovery_contains_expected_components() {
     assert!(payload["cmps"]["gpu_power"]["device_class"] == "power");
     assert!(payload["cmps"]["caffeine"]["p"] == "switch");
     assert!(payload["cmps"]["lock"]["p"] == "button");
-    assert!(payload["cmps"].get("hibernate").is_none());
+    assert!(payload["cmps"]["hibernate"]["p"] == "button");
+    assert!(payload["cmps"]["shutdown"]["p"] == "button");
+    assert!(payload["cmps"]["reboot"]["p"] == "button");
     assert!(payload["cmps"]["active_window_title"]["p"] == "sensor");
     assert!(payload["dev"]["ids"][0] == "testdevice01");
     assert!(payload["cmps"]["ssh_listening"]["p"] == "binary_sensor");
@@ -28,7 +30,7 @@ fn golden_device_discovery_contains_expected_components() {
     assert!(payload["cmps"]["notify_message"]["p"] == "notify");
     assert!(payload["cmps"]["notify_urgent"]["p"] == "notify");
     assert!(payload["cmps"].get("notify").is_none());
-    assert!(payload["cmps"].get("media_play_pause").is_none());
+    assert!(payload["cmps"]["media_play_pause"]["p"] == "button");
     assert!(payload["cmps"].get("http_alt_listening").is_none());
     assert!(payload["cmps"]["update_available"]["p"] == "binary_sensor");
     assert!(payload["cmps"]["update_auto"]["p"] == "switch");

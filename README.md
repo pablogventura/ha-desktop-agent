@@ -8,7 +8,7 @@ Linux runs as a systemd **user** session service. Windows uses two processes: a 
 
 Sensors include CPU, RAM, swap, RAPL package/DRAM power when readable, NVIDIA GPU metrics, uptime, idle time, chassis type (SMBIOS `/sys/class/dmi/id/chassis_type`: desktop, laptop, ...), session type, desktop environment, optional focused application, process presence (Discord, Ollama, ...), Tailscale and LAN IPv4 addresses, WireGuard, TCP listeners (SSH/VNC/RDP by default), disk usage, LAN throughput, Wi-Fi, audio volume, system battery and AC (not mouse/keyboard HID batteries), and an estimated wall-power model you can calibrate.
 
-Actions (allowlisted): lock, suspend, hibernate, shutdown, reboot, and a caffeine switch that takes a logind inhibit lock. Dangerous power actions are off by default.
+Actions (allowlisted): lock, suspend, hibernate, shutdown, reboot, and a caffeine switch that takes a logind inhibit lock. Power actions and media (MPRIS/SMTC) are on by default; set them `false` in YAML to disable. Media metadata can be sensitive.
 
 ## Requirements
 
@@ -52,7 +52,7 @@ Network sensors (Linux): Tailscale uses the `tailscale*` interface (or a running
 
 Chassis is always published from SMBIOS `chassis_type`. Battery and AC adapters use `/sys/class/power_supply` with `sensors.battery` (default on). Only `scope=System` batteries (or `BAT*` / `CMB*` when scope is missing) are used; HID mouse/keyboard packs are ignored. Without a system battery, `battery_present` is off and the other battery sensors are unavailable. Status, health, and cycle count are diagnostic entities.
 
-Audio uses `wpctl` on the default PipeWire sink (`mute`, `volume_up` / `volume_down`). Desktop notifications are two MQTT notify entities on the same device: `notify_message` (normal urgency, respects GNOME Do Not Disturb) and `notify_urgent` (critical urgency, GNOME still shows a banner when DND is on). Use Home Assistant `notify.send_message`. A plain payload is the body; `notify.title` in YAML is the default title. An empty payload uses `notify.body`. Optional JSON `{"title":"...","body":"..."}` (or `message` instead of `body`) is allowed; extra keys are ignored and urgency is never taken from JSON. Title and body are capped at 255 characters. Payloads are passed to D-Bus `Notify` only, never to a shell. GNOME Do Not Disturb is the `do_not_disturb` switch (`gsettings` `org.gnome.desktop.notifications show-banners`; ON means banners off). MPRIS media controls are off unless `sensors.mpris: true`.
+Audio uses `wpctl` on the default PipeWire sink (`mute`, `volume_up` / `volume_down`). On Windows the session helper reports the default render endpoint friendly name (Settings device name) as `audio_sink`. Desktop notifications are two MQTT notify entities on the same device: `notify_message` (normal urgency, respects GNOME Do Not Disturb) and `notify_urgent` (critical urgency, GNOME still shows a banner when DND is on). Use Home Assistant `notify.send_message`. A plain payload is the body; `notify.title` in YAML is the default title. An empty payload uses `notify.body`. Optional JSON `{"title":"...","body":"..."}` (or `message` instead of `body`) is allowed; extra keys are ignored and urgency is never taken from JSON. Title and body are capped at 255 characters. Payloads are passed to D-Bus `Notify` only, never to a shell. GNOME Do Not Disturb is the `do_not_disturb` switch (`gsettings` `org.gnome.desktop.notifications show-banners`; ON means banners off). MPRIS/SMTC media controls are on by default (`sensors.mpris: false` to disable).
 
 ```bash
 chmod 600 ~/.config/ha-desktop-agent/config.yaml
@@ -115,7 +115,9 @@ The named pipe is `\\.\pipe\ha-desktop-agent-<device_id>` with ACL for SYSTEM an
 | `cpu_power` / `dram_power` | Unavailable (no RAPL) |
 | GPU | NVIDIA via NVML only |
 | Focus Assist (`do_not_disturb`) | Read-only best-effort; switch cannot write |
+| `audio_sink` | Default render endpoint friendly name |
 | `active_application` / `active_window_title` | Session helper (titles can be sensitive; disable in YAML if needed) |
+| Media (SMTC) | On when `sensors.mpris` is true (default) |
 | Battery / AC | `GetSystemPowerStatus` |
 
 ## Automatic updates
@@ -132,7 +134,7 @@ Config block `update:` (see `config.example.yaml`):
 
 ## Safety
 
-- Shutdown, reboot, and hibernate are disabled until you set them to `true`
+- Shutdown, reboot, and hibernate are on by default; set them `false` if you do not want those buttons
 - Only registered actions and `commands:` entries can run
 - Prefer a dedicated MQTT user with ACL limited to this device prefix
 

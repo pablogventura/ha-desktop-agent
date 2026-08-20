@@ -30,7 +30,7 @@ sensors:
   wifi: true
   online: true
   audio: true
-  mpris: false
+  mpris: true
   dnd: true
   disabled: []
 
@@ -51,9 +51,9 @@ listeners:
 actions:
   lock: true
   suspend: true
-  hibernate: false
-  shutdown: false
-  reboot: false
+  hibernate: true
+  shutdown: true
+  reboot: true
   caffeine: true
   mute: true
   volume: true

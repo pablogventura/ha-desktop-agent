@@ -160,7 +160,7 @@ pub struct SensorsConfig {
     pub online: bool,
     #[serde(default = "default_true")]
     pub audio: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub mpris: bool,
     #[serde(default = "default_true")]
     pub dnd: bool,
@@ -183,7 +183,7 @@ impl Default for SensorsConfig {
             wifi: true,
             online: true,
             audio: true,
-            mpris: false,
+            mpris: true,
             dnd: true,
             disabled: Vec::new(),
         }
@@ -208,8 +208,11 @@ pub struct PortListener {
 pub struct ActionsConfig {
     pub lock: bool,
     pub suspend: bool,
+    #[serde(default = "default_true")]
     pub hibernate: bool,
+    #[serde(default = "default_true")]
     pub shutdown: bool,
+    #[serde(default = "default_true")]
     pub reboot: bool,
     pub caffeine: bool,
     #[serde(default = "default_true")]
@@ -227,9 +230,9 @@ impl Default for ActionsConfig {
         Self {
             lock: true,
             suspend: true,
-            hibernate: false,
-            shutdown: false,
-            reboot: false,
+            hibernate: true,
+            shutdown: true,
+            reboot: true,
             caffeine: true,
             mute: true,
             volume: true,
@@ -463,7 +466,7 @@ mqtt:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.device.name, "desktop");
         assert!(config.actions.lock);
-        assert!(!config.actions.shutdown);
+        assert!(config.actions.shutdown);
         assert!(config.sensors.active_window_title);
         assert!(config.sensors.tailscale);
         assert_eq!(config.listeners.len(), 3);

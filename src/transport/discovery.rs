@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(payload["cmps"]["notify_message"]["p"], "notify");
         assert_eq!(payload["cmps"]["notify_urgent"]["p"], "notify");
         assert!(payload["cmps"].get("notify").is_none());
-        assert!(payload["cmps"].get("shutdown").is_none());
+        assert!(payload["cmps"]["shutdown"]["p"] == "button");
         assert_eq!(
             payload["cmps"]["cpu_usage"]["default_entity_id"],
             "desktop_cpu_usage"

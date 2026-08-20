@@ -7,7 +7,7 @@ use windows::core::w;
 use windows::core::{Interface, Result as WinResult, HSTRING};
 use windows::Win32::Foundation::{CloseHandle, HWND, MAX_PATH};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator};
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
@@ -313,22 +313,53 @@ fn workstation_locked() -> Option<bool> {
 
 fn audio_endpoint() -> WinResult<IAudioEndpointVolume> {
     unsafe {
+        default_render_device()?.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+    }
+}
+
+fn default_render_device() -> WinResult<IMMDevice> {
+    unsafe {
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
-        let device = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia)?;
-        device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+        enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia)
+    }
+}
+
+fn endpoint_friendly_name(device: &IMMDevice) -> Option<String> {
+    use windows::core::{BSTR, GUID, PROPVARIANT};
+    use windows::Win32::System::Com::STGM_READ;
+    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
+
+    // PKEY_Device_FriendlyName
+    const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
+        pid: 14,
+    };
+
+    unsafe {
+        let store: IPropertyStore = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value: PROPVARIANT = store.GetValue(&FRIENDLY_NAME).ok()?;
+        let text = BSTR::try_from(&value).ok()?.to_string();
+        let text = truncate_ha_state(text.trim());
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
     }
 }
 
 fn audio_state() -> anyhow::Result<(f64, bool, Option<String>)> {
     unsafe {
-        let volume = audio_endpoint()?;
+        let device = default_render_device()?;
+        let sink = endpoint_friendly_name(&device);
+        let volume = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)?;
         let scalar = volume.GetMasterVolumeLevelScalar()?;
         let muted = volume.GetMute()?;
         Ok((
             (f64::from(scalar) * 100.0).clamp(0.0, 100.0),
             muted.as_bool(),
-            Some("Default".into()),
+            sink,
         ))
     }
 }
