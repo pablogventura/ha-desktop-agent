@@ -390,7 +390,7 @@ impl<'a> ActionRouter<'a> {
                 let Some(update) = self.update else {
                     anyhow::bail!("update controller unavailable");
                 };
-                update.apply_pending().await?;
+                update.check_and_apply().await?;
                 info!("apply_update requested");
                 Ok(())
             }

@@ -198,6 +198,20 @@ impl UpdateController {
             }
         }
     }
+
+    /// Refresh GitHub Releases, then apply if a newer version exists.
+    /// Used by the MQTT `apply_update` button (does not wait for the check interval).
+    pub async fn check_and_apply(&self) -> anyhow::Result<()> {
+        self.check_now().await?;
+        let has = {
+            let guard = self.inner.lock().await;
+            guard.available.is_some()
+        };
+        if !has {
+            anyhow::bail!("already up to date ({})", env!("CARGO_PKG_VERSION"));
+        }
+        self.apply_pending().await
+    }
 }
 
 async fn apply_downloaded(http: &reqwest::Client, update: &AvailableUpdate) -> anyhow::Result<()> {
