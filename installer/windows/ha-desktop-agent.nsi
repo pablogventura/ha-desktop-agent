@@ -43,7 +43,7 @@ Section "Install"
   skip_config:
 
   !insertmacro StopAndRemoveService
-  nsExec::ExecToLog 'sc.exe create ha-desktop-agent binPath= "$INSTDIR\ha-desktop-agent.exe service" start= auto DisplayName= "Home Assistant desktop agent"'
+  nsExec::ExecToLog 'sc.exe create ha-desktop-agent binPath= "\"$INSTDIR\ha-desktop-agent.exe\" service" start= auto DisplayName= "ha-desktop-agent"'
   Pop $0
   nsExec::ExecToLog 'sc.exe description ha-desktop-agent "MQTT desktop agent for Home Assistant"'
   Pop $0

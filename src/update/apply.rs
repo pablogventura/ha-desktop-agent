@@ -103,25 +103,60 @@ fn linux_binary_dest() -> anyhow::Result<PathBuf> {
 
 #[cfg(windows)]
 async fn apply_windows_setup(bytes: &[u8]) -> anyhow::Result<()> {
-    let path = std::env::temp_dir().join("ha-desktop-agent-setup.exe");
-    tokio::fs::write(&path, bytes).await?;
-    info!(path = %path.display(), "running silent NSIS setup");
-    let status = Command::new(&path).arg("/S").status().await?;
-    if status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!("NSIS setup exited with {status}");
+    let setup = std::env::temp_dir().join("ha-desktop-agent-setup.exe");
+    tokio::fs::write(&setup, bytes).await?;
+    let script = std::env::temp_dir().join("ha-desktop-agent-update.cmd");
+    // Delay so this service can stop and unlock Program Files before NSIS replaces files.
+    let body = format!(
+        "@echo off\r\n\
+         timeout /t 5 /nobreak >nul\r\n\
+         \"{setup}\" /S\r\n\
+         sc start ha-desktop-agent\r\n\
+         schtasks /Delete /TN ha-desktop-agent-update-once /F >nul 2>&1\r\n",
+        setup = setup.display()
+    );
+    tokio::fs::write(&script, body.as_bytes()).await?;
+    let tr = format!("\"{}\"", script.display());
+    info!(script = %script.display(), "scheduling silent NSIS update");
+    let create = Command::new("schtasks.exe")
+        .args([
+            "/Create",
+            "/TN",
+            "ha-desktop-agent-update-once",
+            "/RU",
+            "SYSTEM",
+            "/RL",
+            "HIGHEST",
+            "/SC",
+            "ONCE",
+            "/ST",
+            "00:00",
+            "/F",
+            "/TR",
+            &tr,
+        ])
+        .status()
+        .await?;
+    if !create.success() {
+        anyhow::bail!("schtasks create update failed: {create}");
     }
+    let run = Command::new("schtasks.exe")
+        .args(["/Run", "/TN", "ha-desktop-agent-update-once"])
+        .status()
+        .await?;
+    if !run.success() {
+        anyhow::bail!("schtasks run update failed: {run}");
+    }
+    Ok(())
 }
 
 pub fn restart_agent() {
     #[cfg(windows)]
     {
+        // Stop so a scheduled NSIS update (or SCM) can replace the binary; start is
+        // handled by the installer / update script.
         let _ = std::process::Command::new("sc.exe")
             .args(["stop", "ha-desktop-agent"])
-            .status();
-        let _ = std::process::Command::new("sc.exe")
-            .args(["start", "ha-desktop-agent"])
             .status();
         return;
     }

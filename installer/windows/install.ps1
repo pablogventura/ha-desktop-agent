@@ -52,18 +52,20 @@ if (Test-Path -LiteralPath $exampleSrc) {
 }
 
 $exe = Join-Path $installDir "ha-desktop-agent.exe"
-$binPath = "`"$exe`" service"
 
 & sc.exe stop ha-desktop-agent 2>$null | Out-Null
 Start-Sleep -Seconds 1
 & sc.exe delete ha-desktop-agent 2>$null | Out-Null
 Start-Sleep -Seconds 1
-& sc.exe create ha-desktop-agent binPath= $binPath start= auto DisplayName= "Home Assistant desktop agent"
+
+# Paths with spaces need nested quotes: binPath= "\"C:\...\exe\" service"
+$create = "sc create ha-desktop-agent binPath= `"\`"$exe\`" service`" start= auto DisplayName= `"ha-desktop-agent`""
+cmd.exe /c $create
 if ($LASTEXITCODE -ne 0) {
     throw "sc create failed with exit $LASTEXITCODE"
 }
-& sc.exe description ha-desktop-agent "MQTT desktop agent for Home Assistant" | Out-Null
-& sc.exe start ha-desktop-agent
+cmd.exe /c "sc description ha-desktop-agent `"MQTT desktop agent for Home Assistant`"" | Out-Null
+cmd.exe /c "sc start ha-desktop-agent"
 if ($LASTEXITCODE -ne 0) {
     throw "sc start failed with exit $LASTEXITCODE"
 }
