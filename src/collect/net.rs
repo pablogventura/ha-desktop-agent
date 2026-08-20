@@ -1,3 +1,4 @@
+use crate::collect::iface_filter::{is_tailscale, is_wireguard, skip_lan_iface};
 use crate::config::Config;
 use crate::entity::{truncate_ha_state, Value};
 use crate::snapshot::Snapshot;
@@ -12,6 +13,7 @@ pub struct IfaceView {
     pub up: bool,
 }
 
+#[cfg(target_os = "linux")]
 pub fn collect_net(
     config: &Config,
     snapshot: &mut Snapshot,
@@ -35,6 +37,7 @@ pub fn collect_net(
     lan_iface
 }
 
+#[cfg(target_os = "linux")]
 fn live_ifaces(sys_class_net: &Path) -> Vec<IfaceView> {
     let mut ifaces = Vec::new();
     let Ok(addrs) = if_addrs::get_if_addrs() else {
@@ -58,6 +61,7 @@ fn live_ifaces(sys_class_net: &Path) -> Vec<IfaceView> {
     ifaces
 }
 
+#[cfg(target_os = "linux")]
 fn operstate_up(path: &Path) -> bool {
     match std::fs::read_to_string(path) {
         Ok(raw) => {
@@ -137,29 +141,6 @@ fn text_or_unavailable(value: Option<String>) -> Value {
         Some(text) if !text.is_empty() => Value::Text(text),
         _ => Value::Unavailable,
     }
-}
-
-pub fn is_tailscale(name: &str) -> bool {
-    name.starts_with("tailscale")
-}
-
-pub fn is_wireguard(name: &str) -> bool {
-    let Some(rest) = name.strip_prefix("wg") else {
-        return false;
-    };
-    !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit())
-}
-
-pub fn skip_lan_iface(name: &str) -> bool {
-    name == "lo"
-        || name.starts_with("docker")
-        || name.starts_with("veth")
-        || name.starts_with("br-")
-        || name.starts_with("virbr")
-        || name.starts_with("lxcbr")
-        || name.starts_with("tun")
-        || is_tailscale(name)
-        || is_wireguard(name)
 }
 
 fn usable_ipv4(ip: Ipv4Addr) -> bool {
@@ -274,6 +255,7 @@ pub fn parse_default_routes(contents: &str) -> Vec<String> {
     rows.into_iter().map(|(_, iface)| iface).collect()
 }
 
+#[cfg(target_os = "linux")]
 fn listening_ports_from_proc(proc_root: &Path) -> BTreeSet<u16> {
     let mut ports = BTreeSet::new();
     for name in ["net/tcp", "net/tcp6"] {
@@ -284,6 +266,7 @@ fn listening_ports_from_proc(proc_root: &Path) -> BTreeSet<u16> {
     ports
 }
 
+#[cfg(target_os = "linux")]
 fn read_to_string_lossy(path: &Path) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }

@@ -13,8 +13,18 @@ use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
 pub async fn run(config: Config, config_path: Option<PathBuf>) -> anyhow::Result<()> {
-    if let Some(path) = config_path {
-        warn_if_world_readable(&path);
+    #[cfg(target_os = "windows")]
+    {
+        return run_windows_service(config, config_path, None).await;
+    }
+    #[cfg(not(target_os = "windows"))]
+    run_linux(config, config_path).await
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn run_linux(config: Config, config_path: Option<PathBuf>) -> anyhow::Result<()> {
+    if let Some(path) = &config_path {
+        warn_if_world_readable(path);
     }
     if cfg!(unix) && is_root() {
         warn!("running as root is discouraged; use a systemd --user unit");
@@ -37,6 +47,40 @@ pub async fn run(config: Config, config_path: Option<PathBuf>) -> anyhow::Result
     #[cfg(target_os = "linux")]
     collectors.set_session(session.clone());
 
+    mqtt_loop(config, device_id, entities, collectors, Some(session), None).await
+}
+
+#[cfg(target_os = "windows")]
+pub async fn run_windows_service(
+    config: Config,
+    config_path: Option<PathBuf>,
+    scm_stop: Option<std::sync::mpsc::Receiver<()>>,
+) -> anyhow::Result<()> {
+    if let Some(path) = &config_path {
+        warn_if_world_readable(path);
+    }
+    let device_id = resolve_device_id(&config);
+    let entities = enabled_entities(&config);
+    info!(
+        device_id = %device_id,
+        entity_count = entities.len(),
+        "starting ha-desktop-agent windows service"
+    );
+    let hub = Arc::new(crate::collect::windows::SessionHub::new());
+    crate::collect::windows::spawn_pipe_server(config.clone(), hub.clone());
+    let collectors = Collectors::new_windows(hub.values()).await;
+    mqtt_loop(config, device_id, entities, collectors, Some(hub), scm_stop).await
+}
+
+async fn mqtt_loop(
+    config: Config,
+    device_id: String,
+    entities: Vec<crate::entity::EntityMeta>,
+    mut collectors: Collectors,
+    #[cfg(target_os = "linux")] session: Option<Arc<crate::collect::linux_session::LinuxSession>>,
+    #[cfg(target_os = "windows")] hub: Option<Arc<crate::collect::windows::SessionHub>>,
+    scm_stop: Option<std::sync::mpsc::Receiver<()>>,
+) -> anyhow::Result<()> {
     let mut mqtt = MqttTransport::start(&config, &device_id)?;
     mqtt.wait_connected().await;
     mqtt.subscribe_commands(&config, &device_id).await?;
@@ -57,9 +101,26 @@ pub async fn run(config: Config, config_path: Option<PathBuf>) -> anyhow::Result
                 info!("shutdown signal received");
                 break;
             }
+            _ = async {
+                if let Some(rx) = &scm_stop {
+                    while rx.try_recv().is_err() {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                info!("service stop requested");
+                break;
+            }
             command = mqtt.recv_command() => {
                 let Some(command) = command else { break };
-                handle_command(&config, #[cfg(target_os = "linux")] Some(session.as_ref()), command).await;
+                handle_command(
+                    &config,
+                    #[cfg(target_os = "linux")] session.as_deref(),
+                    #[cfg(target_os = "windows")] hub.as_deref(),
+                    command,
+                ).await;
             }
             _ = interval.tick() => {
                 let mut snapshot = Snapshot::default();
@@ -84,7 +145,12 @@ pub async fn run(config: Config, config_path: Option<PathBuf>) -> anyhow::Result
                     }
                 }
                 while let Some(command) = mqtt.try_recv_command() {
-                    handle_command(&config, #[cfg(target_os = "linux")] Some(session.as_ref()), command).await;
+                    handle_command(
+                        &config,
+                        #[cfg(target_os = "linux")] session.as_deref(),
+                        #[cfg(target_os = "windows")] hub.as_deref(),
+                        command,
+                    ).await;
                 }
             }
         }
@@ -95,12 +161,15 @@ pub async fn run(config: Config, config_path: Option<PathBuf>) -> anyhow::Result
 async fn handle_command(
     config: &Config,
     #[cfg(target_os = "linux")] session: Option<&crate::collect::linux_session::LinuxSession>,
+    #[cfg(target_os = "windows")] hub: Option<&crate::collect::windows::SessionHub>,
     command: IncomingCommand,
 ) {
     let router = ActionRouter::new(
         config,
         #[cfg(target_os = "linux")]
         session,
+        #[cfg(target_os = "windows")]
+        hub,
     );
     if let Err(err) = router.handle(command).await {
         error!("action failed: {err:#}");

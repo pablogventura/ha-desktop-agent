@@ -20,6 +20,15 @@ struct Cli {
 enum Commands {
     /// Parse and validate the configuration file
     Validate,
+    /// Windows service (MQTT + machine collectors). Use --console to skip SCM.
+    #[cfg(target_os = "windows")]
+    Service {
+        #[arg(long)]
+        console: bool,
+    },
+    /// Windows session helper (named pipe client)
+    #[cfg(target_os = "windows")]
+    Session,
 }
 
 #[tokio::main]
@@ -37,6 +46,22 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Validate) => {
             println!("config ok (device: {})", config.device.name);
             Ok(())
+        }
+        #[cfg(target_os = "windows")]
+        Some(Commands::Service { console }) => {
+            if console {
+                ha_desktop_agent::app::run_windows_service(config, cli.config, None).await
+            } else {
+                ha_desktop_agent::collect::windows::dispatch_windows_service()
+                    .map_err(|err| anyhow::anyhow!("{err}"))
+            }
+        }
+        #[cfg(target_os = "windows")]
+        Some(Commands::Session) => {
+            tokio::task::spawn_blocking(move || {
+                ha_desktop_agent::collect::windows::run_session_loop(config)
+            })
+            .await?
         }
         None => ha_desktop_agent::app::run(config, cli.config).await,
     }

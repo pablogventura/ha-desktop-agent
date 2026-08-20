@@ -21,20 +21,38 @@ impl DiskUsage {
 }
 
 pub fn collect_disk(snapshot: &mut Snapshot) {
-    if let Some(usage) = filesystem_usage(Path::new("/")) {
+    let root = system_root();
+    if let Some(usage) = filesystem_usage(&root) {
         apply_disk(snapshot, "root", usage);
     }
-    let home = std::env::var("HOME").ok().filter(|value| !value.is_empty());
-    if let Some(home) = home {
-        let home_path = Path::new(&home);
-        if same_filesystem(Path::new("/"), home_path) {
+    if let Some(home) = home_dir() {
+        if same_filesystem(&root, &home) {
             snapshot.set("disk_home_used", Value::Unavailable);
             snapshot.set("disk_home_free", Value::Unavailable);
             snapshot.set("disk_home_usage", Value::Unavailable);
-        } else if let Some(usage) = filesystem_usage(home_path) {
+        } else if let Some(usage) = filesystem_usage(&home) {
             apply_disk(snapshot, "home", usage);
         }
     }
+}
+
+fn system_root() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        std::path::PathBuf::from(format!("{drive}\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from("/")
+    }
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 fn apply_disk(snapshot: &mut Snapshot, kind: &str, usage: DiskUsage) {
@@ -57,11 +75,44 @@ pub fn filesystem_usage(path: &Path) -> Option<DiskUsage> {
     {
         unix_statvfs(path)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_usage(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         None
     }
+}
+
+#[cfg(windows)]
+fn windows_usage(path: &Path) -> Option<DiskUsage> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let mut free = 0u64;
+    let mut total = 0u64;
+    let mut total_free = 0u64;
+    unsafe {
+        GetDiskFreeSpaceExW(
+            PCWSTR(wide.as_ptr()),
+            Some(&mut free),
+            Some(&mut total),
+            Some(&mut total_free),
+        )
+        .ok()?;
+    }
+    if total == 0 {
+        return None;
+    }
+    Some(DiskUsage {
+        total_bytes: total,
+        used_bytes: total.saturating_sub(free),
+        free_bytes: free,
+    })
 }
 
 #[cfg(unix)]
@@ -101,9 +152,17 @@ fn same_filesystem(left: &Path, right: &Path) -> bool {
     left_meta.dev() == right_meta.dev()
 }
 
-#[cfg(not(unix))]
-fn same_filesystem(_left: &Path, _right: &Path) -> bool {
-    true
+#[cfg(windows)]
+fn same_filesystem(left: &Path, right: &Path) -> bool {
+    drive_letter(left) == drive_letter(right)
+}
+
+#[cfg(windows)]
+fn drive_letter(path: &Path) -> Option<char> {
+    path.to_string_lossy()
+        .chars()
+        .next()
+        .map(|ch| ch.to_ascii_uppercase())
 }
 
 #[cfg(test)]

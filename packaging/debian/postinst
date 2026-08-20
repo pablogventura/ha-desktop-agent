@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+echo "ha-desktop-agent: copy /usr/share/ha-desktop-agent/config.example.yaml to ~/.config/ha-desktop-agent/config.yaml (chmod 600), then systemctl --user enable --now ha-desktop-agent.service"
+exit 0

@@ -1,0 +1,11 @@
+Package: ha-desktop-agent
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libc6
+Maintainer: ha-desktop-agent maintainers
+Description: Desktop telemetry agent for Home Assistant
+ User-session agent that publishes one MQTT Discovery device to Home Assistant.
+ Does not enable the systemd user unit; copy the example config and enable it
+ yourself.

@@ -373,13 +373,27 @@ pub fn resolve_config_path(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
             return Ok(path);
         }
     }
+    #[cfg(windows)]
+    {
+        if let Ok(program_data) = env::var("ProgramData") {
+            let path = PathBuf::from(program_data).join("ha-desktop-agent/config.yaml");
+            if path.exists() {
+                return Ok(path);
+            }
+        }
+    }
     let local = PathBuf::from("config.yaml");
     if local.exists() {
         return Ok(local);
     }
+    #[cfg(windows)]
+    anyhow::bail!(
+        "no config file found; pass --config or create %ProgramData%\\ha-desktop-agent\\config.yaml"
+    );
+    #[cfg(not(windows))]
     anyhow::bail!(
         "no config file found; pass --config or create $XDG_CONFIG_HOME/ha-desktop-agent/config.yaml"
-    )
+    );
 }
 
 fn validate_id(id: &str, field: &str) -> anyhow::Result<()> {

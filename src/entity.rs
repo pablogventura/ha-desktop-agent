@@ -220,7 +220,11 @@ pub fn enabled_entities(config: &Config) -> Vec<EntityMeta> {
     if config.sensors.audio && config.actions.mute && !config.is_disabled("mute") {
         entities.push(EntityMeta::switch("mute", "Mute", Some("mdi:volume-off")));
     }
-    if config.sensors.dnd && config.actions.dnd && !config.is_disabled("do_not_disturb") {
+    if config.sensors.dnd
+        && config.actions.dnd
+        && !cfg!(target_os = "windows")
+        && !config.is_disabled("do_not_disturb")
+    {
         entities.push(EntityMeta::switch(
             "do_not_disturb",
             "Do not disturb",

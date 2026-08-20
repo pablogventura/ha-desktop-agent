@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Assistant desktop agent
+Documentation=file:///usr/share/doc/ha-desktop-agent/README.md
+After=graphical-session.target network-online.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/ha-desktop-agent --config %E/ha-desktop-agent/config.yaml
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+# User session only. Do not run this as a system unit or as root.
+
+[Install]
+WantedBy=graphical-session.target

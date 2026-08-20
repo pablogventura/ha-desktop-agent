@@ -7,6 +7,10 @@ pub fn resolve_device_id(config: &Config) -> String {
     if let Some(id) = &config.device.id {
         return sanitize_id(id);
     }
+    #[cfg(windows)]
+    if let Some(id) = windows_machine_guid() {
+        return id;
+    }
     if let Ok(machine) = std::fs::read_to_string("/etc/machine-id") {
         let trimmed = machine.trim();
         if trimmed.len() >= 12 {
@@ -17,6 +21,50 @@ pub fn resolve_device_id(config: &Config) -> String {
         }
     }
     sanitize_id(&config.device.name)
+}
+
+#[cfg(windows)]
+fn windows_machine_guid() -> Option<String> {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+    };
+    unsafe {
+        let mut key = Default::default();
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            w!("SOFTWARE\\Microsoft\\Cryptography"),
+            0,
+            KEY_READ,
+            &mut key,
+        )
+        .ok()?;
+        let mut data = [0u16; 64];
+        let mut size = (data.len() * 2) as u32;
+        let mut kind = 0u32;
+        let status = RegQueryValueExW(
+            key,
+            w!("MachineGuid"),
+            None,
+            Some(&mut kind),
+            Some(data.as_mut_ptr() as *mut u8),
+            Some(&mut size),
+        );
+        let _ = RegCloseKey(key);
+        status.ok()?;
+        if kind != REG_SZ.0 {
+            return None;
+        }
+        let guid = String::from_utf16_lossy(&data);
+        let hex: String = guid.chars().filter(|ch| ch.is_ascii_hexdigit()).collect();
+        if hex.len() >= 12 {
+            Some(sanitize_id(&hex[..12]))
+        } else if hex.is_empty() {
+            None
+        } else {
+            Some(sanitize_id(&hex))
+        }
+    }
 }
 
 pub fn sanitize_id(value: &str) -> String {

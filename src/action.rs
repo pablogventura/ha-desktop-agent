@@ -7,6 +7,8 @@ use tracing::{info, warn};
 
 #[cfg(target_os = "linux")]
 use crate::collect::linux_session::LinuxSession;
+#[cfg(target_os = "windows")]
+use crate::collect::windows::SessionHub;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_NOTIFY_PAYLOAD_BYTES: usize = 8 * 1024;
@@ -111,17 +113,22 @@ pub struct ActionRouter<'a> {
     config: &'a Config,
     #[cfg(target_os = "linux")]
     session: Option<&'a LinuxSession>,
+    #[cfg(target_os = "windows")]
+    hub: Option<&'a SessionHub>,
 }
 
 impl<'a> ActionRouter<'a> {
     pub fn new(
         config: &'a Config,
         #[cfg(target_os = "linux")] session: Option<&'a LinuxSession>,
+        #[cfg(target_os = "windows")] hub: Option<&'a SessionHub>,
     ) -> Self {
         Self {
             config,
             #[cfg(target_os = "linux")]
             session,
+            #[cfg(target_os = "windows")]
+            hub,
         }
     }
 
@@ -149,6 +156,18 @@ impl<'a> ActionRouter<'a> {
                     info!(on, "caffeine updated");
                     return Ok(());
                 }
+                #[cfg(target_os = "windows")]
+                if let Some(hub) = self.hub {
+                    let command = IncomingCommand::Switch {
+                        id: "caffeine".into(),
+                        on,
+                    };
+                    if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                        hub.call(rpc).await?;
+                        info!(on, "caffeine updated");
+                        return Ok(());
+                    }
+                }
                 anyhow::bail!("caffeine is not supported on this platform");
             }
             "mute" => {
@@ -161,8 +180,22 @@ impl<'a> ActionRouter<'a> {
                     info!(on, "mute updated");
                     return Ok(());
                 }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(target_os = "windows")]
+                if let Some(hub) = self.hub {
+                    let command = IncomingCommand::Switch {
+                        id: "mute".into(),
+                        on,
+                    };
+                    if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                        hub.call(rpc).await?;
+                        info!(on, "mute updated");
+                        return Ok(());
+                    }
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "windows")))]
                 anyhow::bail!("mute is not supported on this platform");
+                #[cfg(target_os = "windows")]
+                anyhow::bail!("mute requires the session helper");
             }
             "do_not_disturb" => {
                 if !self.config.action_enabled("do_not_disturb") {
@@ -189,6 +222,15 @@ impl<'a> ActionRouter<'a> {
                     session.lock_screen().await?;
                     info!("lock requested");
                     return Ok(());
+                }
+                #[cfg(target_os = "windows")]
+                if let Some(hub) = self.hub {
+                    let command = IncomingCommand::Press { id: "lock".into() };
+                    if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                        hub.call(rpc).await?;
+                        info!("lock requested");
+                        return Ok(());
+                    }
                 }
                 anyhow::bail!("lock is not supported on this platform");
             }
@@ -218,6 +260,19 @@ impl<'a> ActionRouter<'a> {
             info!(?urgency, "desktop notification sent");
             return Ok(());
         }
+        #[cfg(target_os = "windows")]
+        if let Some(hub) = self.hub {
+            let command = IncomingCommand::Notify {
+                title: Some(title.clone()),
+                body: Some(body.clone()),
+                urgency,
+            };
+            if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                hub.call(rpc).await?;
+                info!(?urgency, "desktop notification sent");
+                return Ok(());
+            }
+        }
         anyhow::bail!("notify is not supported on this platform");
     }
 
@@ -236,6 +291,23 @@ impl<'a> ActionRouter<'a> {
                     info!(action = id, "power action requested");
                     return Ok(());
                 }
+                #[cfg(target_os = "windows")]
+                {
+                    if id == "lock" {
+                        if let Some(hub) = self.hub {
+                            let command = IncomingCommand::Press { id: "lock".into() };
+                            if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                                hub.call(rpc).await?;
+                                info!(action = id, "power action requested");
+                                return Ok(());
+                            }
+                        }
+                    } else {
+                        crate::collect::windows::power_action(id)?;
+                        info!(action = id, "power action requested");
+                        return Ok(());
+                    }
+                }
                 anyhow::bail!("power action '{id}' is not supported on this platform");
             }
             "volume_up" => {
@@ -245,7 +317,19 @@ impl<'a> ActionRouter<'a> {
                     return Ok(());
                 }
                 #[cfg(not(target_os = "linux"))]
-                anyhow::bail!("volume is not supported on this platform");
+                {
+                    #[cfg(target_os = "windows")]
+                    if let Some(hub) = self.hub {
+                        let command = IncomingCommand::Press {
+                            id: "volume_up".into(),
+                        };
+                        if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                            hub.call(rpc).await?;
+                            return Ok(());
+                        }
+                    }
+                    anyhow::bail!("volume is not supported on this platform");
+                }
             }
             "volume_down" => {
                 #[cfg(target_os = "linux")]
@@ -254,13 +338,33 @@ impl<'a> ActionRouter<'a> {
                     return Ok(());
                 }
                 #[cfg(not(target_os = "linux"))]
-                anyhow::bail!("volume is not supported on this platform");
+                {
+                    #[cfg(target_os = "windows")]
+                    if let Some(hub) = self.hub {
+                        let command = IncomingCommand::Press {
+                            id: "volume_down".into(),
+                        };
+                        if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                            hub.call(rpc).await?;
+                            return Ok(());
+                        }
+                    }
+                    anyhow::bail!("volume is not supported on this platform");
+                }
             }
             "media_play_pause" | "media_next" | "media_previous" => {
                 #[cfg(target_os = "linux")]
                 if let Some(session) = self.session {
                     session.mpris_action(id).await?;
                     return Ok(());
+                }
+                #[cfg(target_os = "windows")]
+                if let Some(hub) = self.hub {
+                    let command = IncomingCommand::Press { id: id.to_string() };
+                    if let Some(rpc) = crate::collect::windows::rpc_from_command(&command) {
+                        hub.call(rpc).await?;
+                        return Ok(());
+                    }
                 }
                 anyhow::bail!("mpris is not supported on this platform");
             }

@@ -3,58 +3,76 @@ mod agent;
 mod battery;
 mod disk;
 mod hwmon;
+mod iface_filter;
+mod net;
 mod nvidia;
 mod proc;
 mod processes;
 mod rapl;
+mod win32_parse;
 
 #[cfg(target_os = "linux")]
 pub mod audio;
 #[cfg(target_os = "linux")]
 pub mod dnd;
-#[cfg(target_os = "linux")]
-mod net;
 
 #[cfg(target_os = "linux")]
 pub mod linux_session;
 
 #[cfg(target_os = "windows")]
-#[allow(dead_code)]
-mod windows;
+pub mod windows;
 
 use crate::config::Config;
 use crate::entity::Value;
 use crate::snapshot::Snapshot;
 use agent::AgentCollector;
+#[cfg(target_os = "linux")]
 use proc::ProcCollector;
+#[cfg(target_os = "linux")]
 use rapl::RaplSampler;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
 #[derive(Default)]
 struct LanSampler {
     prev: Option<(String, u64, u64, Instant)>,
 }
 
 pub struct Collectors {
+    #[cfg(target_os = "linux")]
     proc: ProcCollector,
+    #[cfg(target_os = "linux")]
     rapl: RaplSampler,
     agent: AgentCollector,
+    #[cfg(target_os = "linux")]
     lan: LanSampler,
     #[cfg(target_os = "linux")]
     session: Option<Arc<linux_session::LinuxSession>>,
+    #[cfg(target_os = "windows")]
+    windows: windows::WindowsCollectors,
 }
 
 impl Collectors {
+    #[cfg(target_os = "linux")]
     pub async fn new(_config: &Config) -> Self {
         Self {
             proc: ProcCollector::default(),
             rapl: RaplSampler::default(),
             agent: AgentCollector::new(),
             lan: LanSampler::default(),
-            #[cfg(target_os = "linux")]
             session: None,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub async fn new_windows(
+        session: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Value>>>,
+    ) -> Self {
+        Self {
+            agent: AgentCollector::new(),
+            windows: windows::WindowsCollectors::new(session),
         }
     }
 
@@ -64,67 +82,70 @@ impl Collectors {
     }
 
     pub async fn collect(&mut self, config: &Config, snapshot: &mut Snapshot) {
-        self.proc.collect(snapshot);
         #[cfg(target_os = "linux")]
-        battery::collect_chassis(Path::new("/sys/class/dmi/id/chassis_type"), snapshot);
-        if let Some(temp) = hwmon::read_cpu_temperature_c(Path::new("/sys/class/hwmon")) {
-            snapshot.set("cpu_temperature", Value::Number(temp));
-        }
-        let rapl = self
-            .rapl
-            .sample(Path::new("/sys/class/powercap"), Instant::now());
-        if let Some(w) = rapl.package {
-            snapshot.set("cpu_power", Value::Number(w));
-        }
-        if let Some(w) = rapl.dram {
-            snapshot.set("dram_power", Value::Number(w));
-        }
-        if config.sensors.gpu {
-            nvidia::collect_nvidia(snapshot);
-        }
-        self.agent.collect(snapshot);
-        processes::collect_processes(Path::new("/proc"), &config.processes, snapshot);
-        if config.sensors.disk {
-            disk::collect_disk(snapshot);
-        }
-        #[cfg(target_os = "linux")]
-        if config.sensors.battery {
-            battery::collect_power_supply(Path::new("/sys/class/power_supply"), snapshot);
-        }
-        #[cfg(target_os = "linux")]
-        let lan_iface = net::collect_net(
-            config,
-            snapshot,
-            Path::new("/proc"),
-            Path::new("/sys/class/net"),
-        );
-        #[cfg(target_os = "linux")]
-        if config.sensors.lan_ip {
-            self.lan.sample(
-                lan_iface.as_deref(),
-                Path::new("/proc"),
-                Instant::now(),
+        {
+            self.proc.collect(snapshot);
+            battery::collect_chassis(Path::new("/sys/class/dmi/id/chassis_type"), snapshot);
+            if let Some(temp) = hwmon::read_cpu_temperature_c(Path::new("/sys/class/hwmon")) {
+                snapshot.set("cpu_temperature", Value::Number(temp));
+            }
+            let rapl = self
+                .rapl
+                .sample(Path::new("/sys/class/powercap"), Instant::now());
+            if let Some(w) = rapl.package {
+                snapshot.set("cpu_power", Value::Number(w));
+            }
+            if let Some(w) = rapl.dram {
+                snapshot.set("dram_power", Value::Number(w));
+            }
+            if config.sensors.gpu {
+                nvidia::collect_nvidia(snapshot);
+            }
+            self.agent.collect(snapshot);
+            processes::collect_processes(Path::new("/proc"), &config.processes, snapshot);
+            if config.sensors.disk {
+                disk::collect_disk(snapshot);
+            }
+            if config.sensors.battery {
+                battery::collect_power_supply(Path::new("/sys/class/power_supply"), snapshot);
+            }
+            let lan_iface = net::collect_net(
+                config,
                 snapshot,
+                Path::new("/proc"),
+                Path::new("/sys/class/net"),
             );
-        }
-        #[cfg(target_os = "linux")]
-        if config.sensors.audio {
-            audio::collect_audio(snapshot).await;
-            if let Some(Value::Text(sink)) = snapshot.get("audio_sink").cloned() {
-                snapshot.set_attr("audio_sink", serde_json::json!(sink));
+            if config.sensors.lan_ip {
+                self.lan.sample(
+                    lan_iface.as_deref(),
+                    Path::new("/proc"),
+                    Instant::now(),
+                    snapshot,
+                );
+            }
+            if config.sensors.audio {
+                audio::collect_audio(snapshot).await;
+                if let Some(Value::Text(sink)) = snapshot.get("audio_sink").cloned() {
+                    snapshot.set_attr("audio_sink", serde_json::json!(sink));
+                }
+            }
+            if config.sensors.dnd {
+                dnd::collect_dnd(snapshot).await;
+            }
+            if config.sensors.online {
+                collect_online(config, snapshot).await;
+            }
+            if let Some(session) = &self.session {
+                session.collect(config, snapshot).await;
             }
         }
-        #[cfg(target_os = "linux")]
-        if config.sensors.dnd {
-            dnd::collect_dnd(snapshot).await;
-        }
-        #[cfg(target_os = "linux")]
-        if config.sensors.online {
-            collect_online(config, snapshot).await;
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(session) = &self.session {
-            session.collect(config, snapshot).await;
+        #[cfg(target_os = "windows")]
+        {
+            self.windows.collect(config, snapshot);
+            self.agent.collect(snapshot);
+            if config.sensors.online {
+                collect_online(config, snapshot).await;
+            }
         }
     }
 }
@@ -165,7 +186,6 @@ impl LanSampler {
     }
 }
 
-#[cfg(target_os = "linux")]
 async fn collect_online(config: &Config, snapshot: &mut Snapshot) {
     let host = config.mqtt.host.clone();
     let port = config.mqtt.port;

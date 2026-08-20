@@ -3,6 +3,7 @@ pub mod app;
 pub mod collect;
 pub mod config;
 pub mod entity;
+pub mod ipc;
 pub mod power;
 pub mod snapshot;
 pub mod transport;

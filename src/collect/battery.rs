@@ -90,15 +90,7 @@ pub fn collect_power_supply(power_root: &Path, snapshot: &mut Snapshot) {
 
 pub fn map_chassis_type(contents: &str) -> Option<&'static str> {
     let code: u32 = contents.trim().parse().ok()?;
-    Some(match code {
-        3 | 4 | 6 | 7 | 24 | 34 | 35 => "desktop",
-        8 | 9 | 10 | 14 => "laptop",
-        31 | 32 => "convertible",
-        30 => "tablet",
-        13 => "all_in_one",
-        17 | 23 => "server",
-        _ => "other",
-    })
+    Some(super::win32_parse::map_chassis_code(code))
 }
 
 pub fn is_system_battery(name: &str, kind: &str, scope: Option<&str>) -> bool {
@@ -117,13 +109,11 @@ pub fn is_system_battery(name: &str, kind: &str, scope: Option<&str>) -> bool {
 
 fn infer_ac_without_adapter(snapshot: &Snapshot) -> Value {
     match snapshot.get("chassis") {
-        Some(Value::Text(kind)) if chassis_is_mains_powered(kind) => Value::Bool(true),
+        Some(Value::Text(kind)) if super::win32_parse::chassis_is_mains_powered(kind) => {
+            Value::Bool(true)
+        }
         _ => Value::Unavailable,
     }
-}
-
-fn chassis_is_mains_powered(kind: &str) -> bool {
-    matches!(kind, "desktop" | "server" | "all_in_one")
 }
 
 fn is_ac_adapter(kind: &str) -> bool {
