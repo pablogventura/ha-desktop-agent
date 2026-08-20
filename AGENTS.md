@@ -35,6 +35,8 @@ After a local install: `systemctl --user restart ha-desktop-agent.service`
 
 - **dev server / migrate / package scripts:** not in this repo (Makefile is for build/deb/NSIS only)
 - **CI:** none (do not add GitHub Actions unless asked)
+- **Version:** SemVer in `Cargo.toml` only; packaging (`make deb` / `make windows-installer` / `make release`) and `agent_version` / discovery `sw` follow it. See `.cursor/rules/versioning.mdc`.
+- **Updates:** GitHub Releases via manual `gh release create` (no Actions). Agent checks `update.github_repo` (default `pablogventura/ha-desktop-agent`), verifies Ed25519-signed `SHA256SUMS`, applies `.deb`/`setup.exe`/local binary. MQTT: `update_available`, `update_latest_version`, switch `update_auto` (default on), button `apply_update`.
 
 ## Layout
 
@@ -52,6 +54,7 @@ After a local install: `systemctl --user restart ha-desktop-agent.service`
 - `systemd/ha-desktop-agent.service` - `systemd --user` (`~/.local/bin`)
 - `packaging/debian/` - `.deb` user unit (`/usr/bin`)
 - `installer/windows/ha-desktop-agent.nsi` - NSIS setup.exe
+- `installer/windows/install.ps1` - elevated/remote install without UAC hang over SSH
 - `fixtures/` - `/proc`, DMI chassis, `power_supply` samples
 - `tests/` - `mqtt_discovery.rs`, `proc_fixtures.rs`
 

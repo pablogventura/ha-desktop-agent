@@ -39,6 +39,8 @@ pub struct Config {
     pub power: PowerConfig,
     #[serde(default)]
     pub notify: NotifyConfig,
+    #[serde(default)]
+    pub update: UpdateConfig,
 }
 
 impl Default for Config {
@@ -63,6 +65,7 @@ impl Default for Config {
             commands: Vec::new(),
             power: PowerConfig::default(),
             notify: NotifyConfig::default(),
+            update: UpdateConfig::default(),
         }
     }
 }
@@ -139,6 +142,7 @@ pub struct SensorsConfig {
     pub gpu: bool,
     pub estimated_power: bool,
     pub active_application: bool,
+    #[serde(default = "default_true")]
     pub active_window_title: bool,
     #[serde(default = "default_true")]
     pub tailscale: bool,
@@ -170,7 +174,7 @@ impl Default for SensorsConfig {
             gpu: true,
             estimated_power: true,
             active_application: true,
-            active_window_title: false,
+            active_window_title: true,
             tailscale: true,
             wireguard: true,
             lan_ip: true,
@@ -258,6 +262,38 @@ impl Default for NotifyConfig {
     }
 }
 
+fn default_github_repo() -> String {
+    "pablogventura/ha-desktop-agent".into()
+}
+
+fn default_check_interval_hours() -> u64 {
+    24
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UpdateConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto: bool,
+    #[serde(default = "default_check_interval_hours")]
+    pub check_interval_hours: u64,
+    #[serde(default = "default_github_repo")]
+    pub github_repo: String,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto: true,
+            check_interval_hours: default_check_interval_hours(),
+            github_repo: default_github_repo(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PowerConfig {
@@ -332,6 +368,10 @@ impl Config {
                 anyhow::bail!("command '{}' has empty program", command.id);
             }
         }
+        crate::update::validate_github_repo(&self.update.github_repo)?;
+        if self.update.check_interval_hours == 0 {
+            anyhow::bail!("update.check_interval_hours must be > 0");
+        }
         Ok(())
     }
 
@@ -352,6 +392,7 @@ impl Config {
             "notify" | "notify_message" | "notify_urgent" => self.actions.notify,
             "do_not_disturb" => self.actions.dnd,
             "media_play_pause" | "media_next" | "media_previous" => self.sensors.mpris,
+            "update_auto" | "apply_update" => self.update.enabled,
             _ => self.commands.iter().any(|command| command.id == entity_id),
         }
     }
@@ -423,7 +464,7 @@ mqtt:
         assert_eq!(config.device.name, "desktop");
         assert!(config.actions.lock);
         assert!(!config.actions.shutdown);
-        assert!(!config.sensors.active_window_title);
+        assert!(config.sensors.active_window_title);
         assert!(config.sensors.tailscale);
         assert_eq!(config.listeners.len(), 3);
         assert_eq!(config.listeners[0].id, "ssh");

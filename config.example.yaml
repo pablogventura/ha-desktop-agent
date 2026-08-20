@@ -21,7 +21,7 @@ sensors:
   gpu: true
   estimated_power: true
   active_application: true
-  active_window_title: false
+  active_window_title: true
   tailscale: true
   wireguard: true
   lan_ip: true
@@ -81,3 +81,9 @@ power:
     cpu_usage: 0.0
     gpu_usage: 0.0
   log_csv: null
+
+update:
+  enabled: true
+  auto: true
+  check_interval_hours: 24
+  github_repo: pablogventura/ha-desktop-agent

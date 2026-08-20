@@ -324,6 +324,39 @@ pub fn enabled_entities(config: &Config) -> Vec<EntityMeta> {
             Some("mdi:play"),
         ));
     }
+    if config.update.enabled {
+        if !config.is_disabled("update_available") {
+            entities.push(EntityMeta::binary(
+                "update_available",
+                "Update available",
+                Some("update"),
+            ));
+        }
+        if !config.is_disabled("update_latest_version") {
+            entities.push(EntityMeta::diagnostic_sensor(
+                "update_latest_version",
+                "Latest version",
+                None,
+                None,
+                None,
+            ));
+        }
+        if !config.is_disabled("update_auto") {
+            entities.push(EntityMeta::switch(
+                "update_auto",
+                "Auto update",
+                Some("mdi:update"),
+            ));
+        }
+        if !config.is_disabled("apply_update") {
+            entities.push(EntityMeta::button(
+                "apply_update",
+                "Apply update",
+                None,
+                Some("mdi:download"),
+            ));
+        }
+    }
     entities
 }
 
@@ -349,6 +382,9 @@ fn entity_enabled(config: &Config, meta: &EntityMeta) -> bool {
         "media_title" | "media_artist" | "media_playing" => config.sensors.mpris,
         "battery_present" | "battery_percent" | "battery_charging" | "battery_status"
         | "battery_health" | "battery_cycles" | "ac_power" => config.sensors.battery,
+        "update_available" | "update_latest_version" | "update_auto" | "apply_update" => {
+            config.update.enabled
+        }
         _ => true,
     }
 }
@@ -786,7 +822,7 @@ mod tests {
         assert!(ids.contains(&"lock".into()));
         assert!(!ids.contains(&"shutdown".into()));
         assert!(!ids.contains(&"hibernate".into()));
-        assert!(!ids.contains(&"active_window_title".into()));
+        assert!(ids.contains(&"active_window_title".into()));
         assert!(ids.contains(&"agent_version".into()));
         assert!(ids.contains(&"dram_power".into()));
         assert!(ids.contains(&"tailscale_running".into()));
@@ -802,6 +838,10 @@ mod tests {
         assert!(!ids.contains(&"notify".into()));
         assert!(!ids.contains(&"media_play_pause".into()));
         assert!(!ids.contains(&"http_alt_listening".into()));
+        assert!(ids.contains(&"update_available".into()));
+        assert!(ids.contains(&"update_latest_version".into()));
+        assert!(ids.contains(&"update_auto".into()));
+        assert!(ids.contains(&"apply_update".into()));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::power::{
 };
 use crate::snapshot::{PublishDecision, Snapshot};
 use crate::transport::{resolve_device_id, warn_if_world_readable, MqttTransport};
+use crate::update::UpdateController;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,7 +48,17 @@ async fn run_linux(config: Config, config_path: Option<PathBuf>) -> anyhow::Resu
     #[cfg(target_os = "linux")]
     collectors.set_session(session.clone());
 
-    mqtt_loop(config, device_id, entities, collectors, Some(session), None).await
+    let update = UpdateController::new(&config)?;
+    mqtt_loop(
+        config,
+        device_id,
+        entities,
+        collectors,
+        Some(session),
+        None,
+        Some(update),
+    )
+    .await
 }
 
 #[cfg(target_os = "windows")]
@@ -69,7 +80,17 @@ pub async fn run_windows_service(
     let hub = Arc::new(crate::collect::windows::SessionHub::new());
     crate::collect::windows::spawn_pipe_server(config.clone(), hub.clone());
     let collectors = Collectors::new_windows(hub.values()).await;
-    mqtt_loop(config, device_id, entities, collectors, Some(hub), scm_stop).await
+    let update = UpdateController::new(&config)?;
+    mqtt_loop(
+        config,
+        device_id,
+        entities,
+        collectors,
+        Some(hub),
+        scm_stop,
+        Some(update),
+    )
+    .await
 }
 
 async fn mqtt_loop(
@@ -80,6 +101,7 @@ async fn mqtt_loop(
     #[cfg(target_os = "linux")] session: Option<Arc<crate::collect::linux_session::LinuxSession>>,
     #[cfg(target_os = "windows")] hub: Option<Arc<crate::collect::windows::SessionHub>>,
     scm_stop: Option<std::sync::mpsc::Receiver<()>>,
+    update: Option<Arc<UpdateController>>,
 ) -> anyhow::Result<()> {
     let mut mqtt = MqttTransport::start(&config, &device_id)?;
     mqtt.wait_connected().await;
@@ -119,12 +141,19 @@ async fn mqtt_loop(
                     &config,
                     #[cfg(target_os = "linux")] session.as_deref(),
                     #[cfg(target_os = "windows")] hub.as_deref(),
+                    update.as_deref(),
                     command,
                 ).await;
             }
             _ = interval.tick() => {
+                if let Some(update) = &update {
+                    update.tick().await;
+                }
                 let mut snapshot = Snapshot::default();
                 collectors.collect(&config, &mut snapshot).await;
+                if let Some(update) = &update {
+                    update.publish_state(&mut snapshot).await;
+                }
                 if config.sensors.estimated_power {
                     let features = features_from_snapshot(&snapshot);
                     let watts = model.estimate(&features);
@@ -149,6 +178,7 @@ async fn mqtt_loop(
                         &config,
                         #[cfg(target_os = "linux")] session.as_deref(),
                         #[cfg(target_os = "windows")] hub.as_deref(),
+                        update.as_deref(),
                         command,
                     ).await;
                 }
@@ -162,6 +192,7 @@ async fn handle_command(
     config: &Config,
     #[cfg(target_os = "linux")] session: Option<&crate::collect::linux_session::LinuxSession>,
     #[cfg(target_os = "windows")] hub: Option<&crate::collect::windows::SessionHub>,
+    update: Option<&UpdateController>,
     command: IncomingCommand,
 ) {
     let router = ActionRouter::new(
@@ -170,6 +201,7 @@ async fn handle_command(
         session,
         #[cfg(target_os = "windows")]
         hub,
+        update,
     );
     if let Err(err) = router.handle(command).await {
         error!("action failed: {err:#}");

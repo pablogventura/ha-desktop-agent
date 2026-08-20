@@ -1,0 +1,51 @@
+---
+description: Version management (SemVer, Cargo.toml as single source of truth)
+alwaysApply: true
+---
+
+# Version management
+
+## Source of truth
+
+- Package version lives **only** in `Cargo.toml` (`version = "X.Y.Z"`).
+- Runtime and MQTT Discovery use `env!("CARGO_PKG_VERSION")` (`agent_version`, `sw`).
+- Packaging must read that value (Makefile `VERSION`); do not invent a second number in README, AGENTS, or commit messages as authority.
+
+## SemVer
+
+- `MAJOR.MINOR.PATCH` (no leading `v` in Cargo.toml).
+- **PATCH**: bugfix, docs, packaging-only, no entity/API break.
+- **MINOR**: new entities, sensors, actions, or packaging features; backward compatible.
+- **MAJOR**: breaking entity ids, config keys, MQTT topic layout, or install paths.
+
+## When bumping / releasing
+
+1. Edit `Cargo.toml` version.
+2. Commit: `chore(release): bump version to X.Y.Z`.
+3. `make release` (builds `.deb`, Windows setup, linux binary, `SHA256SUMS`, `SHA256SUMS.sig` with `keys/update-ed25519.seed`).
+4. `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
+5. Publish with **gh** (no GitHub Actions):
+
+```bash
+gh release create vX.Y.Z \
+  dist/ha-desktop-agent_X.Y.Z_amd64.deb \
+  dist/ha-desktop-agent-linux-x86_64 \
+  dist/ha-desktop-agent-setup.exe \
+  dist/SHA256SUMS dist/SHA256SUMS.sig
+```
+
+- Signing seed: `keys/update-ed25519.seed` (gitignored). Public key: `keys/update-ed25519.pub` (committed, embedded in the agent).
+- Do not add CI workflows for release unless Pablo asks.
+
+## Do not
+
+- Hardcode a release version in `installer/windows/*.nsi` (Makefile passes `-DVERSION=`).
+- Ship `.deb` / setup.exe whose filename version disagrees with `Cargo.toml`.
+- Bump version on every WIP commit; bump for releases and tagged builds.
+- Commit the Ed25519 seed or put it in GitHub secrets for Actions (releases are manual).
+
+## Check
+
+```bash
+sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1
+```

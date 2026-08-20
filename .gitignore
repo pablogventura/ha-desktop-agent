@@ -5,3 +5,4 @@ config.yaml
 .idea/
 .vscode/
 dist/
+keys/update-ed25519.seed

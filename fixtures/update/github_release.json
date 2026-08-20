@@ -1,0 +1,25 @@
+{
+  "tag_name": "v0.1.1",
+  "assets": [
+    {
+      "name": "ha-desktop-agent_0.1.1_amd64.deb",
+      "browser_download_url": "https://example.test/ha-desktop-agent_0.1.1_amd64.deb"
+    },
+    {
+      "name": "ha-desktop-agent-linux-x86_64",
+      "browser_download_url": "https://example.test/ha-desktop-agent-linux-x86_64"
+    },
+    {
+      "name": "ha-desktop-agent-setup.exe",
+      "browser_download_url": "https://example.test/ha-desktop-agent-setup.exe"
+    },
+    {
+      "name": "SHA256SUMS",
+      "browser_download_url": "https://example.test/SHA256SUMS"
+    },
+    {
+      "name": "SHA256SUMS.sig",
+      "browser_download_url": "https://example.test/SHA256SUMS.sig"
+    }
+  ]
+}

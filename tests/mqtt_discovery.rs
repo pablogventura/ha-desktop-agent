@@ -14,7 +14,7 @@ fn golden_device_discovery_contains_expected_components() {
     assert!(payload["cmps"]["caffeine"]["p"] == "switch");
     assert!(payload["cmps"]["lock"]["p"] == "button");
     assert!(payload["cmps"].get("hibernate").is_none());
-    assert!(payload["cmps"].get("active_window_title").is_none());
+    assert!(payload["cmps"]["active_window_title"]["p"] == "sensor");
     assert!(payload["dev"]["ids"][0] == "testdevice01");
     assert!(payload["cmps"]["ssh_listening"]["p"] == "binary_sensor");
     assert!(payload["cmps"]["tailscale_ip"]["p"] == "sensor");
@@ -30,6 +30,9 @@ fn golden_device_discovery_contains_expected_components() {
     assert!(payload["cmps"].get("notify").is_none());
     assert!(payload["cmps"].get("media_play_pause").is_none());
     assert!(payload["cmps"].get("http_alt_listening").is_none());
+    assert!(payload["cmps"]["update_available"]["p"] == "binary_sensor");
+    assert!(payload["cmps"]["update_auto"]["p"] == "switch");
+    assert!(payload["cmps"]["apply_update"]["p"] == "button");
     assert!(
         payload["cmps"]["cpu_usage"]["json_attributes_topic"] == "ha-desktop/testdevice01/state"
     );

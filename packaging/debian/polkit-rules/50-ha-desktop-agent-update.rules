@@ -1,0 +1,17 @@
+polkit.addRule(function(action, subject) {
+    if (action.id !== "org.freedesktop.policykit.exec") {
+        return;
+    }
+    if (!subject.local || !subject.active) {
+        return;
+    }
+    if (!subject.isInGroup("sudo") && !subject.isInGroup("wheel")) {
+        return;
+    }
+    var program = action.lookup("program");
+    var commandLine = action.lookup("command_line") || "";
+    if ((program === "/usr/bin/dpkg" || program === "/bin/dpkg") &&
+        commandLine.indexOf("ha-desktop-agent_") !== -1) {
+        return polkit.Result.YES;
+    }
+});

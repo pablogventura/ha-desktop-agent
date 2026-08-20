@@ -7,3 +7,4 @@ pub mod ipc;
 pub mod power;
 pub mod snapshot;
 pub mod transport;
+pub mod update;

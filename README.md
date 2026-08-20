@@ -32,9 +32,12 @@ make test
 make dist                  # copies binaries into dist/
 make deb                   # dist/ha-desktop-agent_<version>_amd64.deb
 make windows-installer     # dist/ha-desktop-agent-setup.exe (needs nsis)
+make release               # deb + installer + linux binary + SHA256SUMS + .sig
 ```
 
-Host packages for cross-compile and installers (install them yourself): `mingw-w64`, rustup target `x86_64-pc-windows-gnu`, `nsis` (`makensis`), `dpkg-deb`. A cross-compiled Windows binary does not replace a test on a real Windows machine.
+Host packages for cross-compile and installers (install them yourself): `mingw-w64`, rustup target `x86_64-pc-windows-gnu`, `nsis` (`makensis`), `dpkg-deb`, Python `cryptography` for signing. A cross-compiled Windows binary does not replace a test on a real Windows machine.
+
+Release (after bumping `Cargo.toml`): `make release`, tag `vX.Y.Z`, then `gh release create` with the files listed by the Makefile. Keep `keys/update-ed25519.seed` private; `keys/update-ed25519.pub` is committed.
 
 ```bash
 cargo build --release
@@ -92,9 +95,36 @@ The unit starts after `graphical-session.target`.
 
 ## Windows
 
-Subcommands: `ha-desktop-agent service` (MQTT plus machine collectors) and `ha-desktop-agent session` (named pipe client). The NSIS installer registers a Windows service and a Task Scheduler "At log on" task. Session entities are unavailable until the helper is running. RAPL `cpu_power` / `dram_power` stay unavailable. Focus Assist / Do Not Disturb is not implemented on Windows. Notify uses WinRT toasts (`notify_message` / `notify_urgent`); lock uses `LockWorkStation`. Power actions run in the service and stay off until enabled in YAML.
+Subcommands: `ha-desktop-agent service` (MQTT plus machine collectors) and `ha-desktop-agent session` (named pipe client). The NSIS installer registers a Windows service and a Task Scheduler "At log on" task, then starts the session helper immediately. Session entities are unavailable until the helper is running. Notify uses WinRT toasts (`notify_message` / `notify_urgent`); lock uses `LockWorkStation`. Power actions run in the service and stay off until enabled in YAML.
 
 The named pipe is `\\.\pipe\ha-desktop-agent-<device_id>` with ACL for SYSTEM and the interactive user. Actions never go through `cmd.exe` or PowerShell.
+
+### Install
+
+- Interactive / local admin desktop: run `ha-desktop-agent-setup.exe` (UAC elevation).
+- Silent on an already-elevated shell: `ha-desktop-agent-setup.exe /S`.
+- Remote OpenSSH (or any non-interactive session): do **not** rely on `setup.exe /S`. The installer requests admin elevation; without an interactive desktop the UAC prompt never appears and the process hangs. Use [`installer/windows/install.ps1`](installer/windows/install.ps1) from an elevated PowerShell, or schedule that script once as `SYSTEM` (`schtasks /Create /RU SYSTEM ...` then `/Run`). Edit `%PROGRAMDATA%\ha-desktop-agent\config.yaml` before or after install, then `ha-desktop-agent.exe validate`.
+
+### Sensors on Windows
+
+| Area | Status |
+|------|--------|
+| CPU usage, RAM/swap, disk root, net, WiFi, uptime, hostname, chassis | Supported |
+| `os_version`, `cpu_frequency` | Supported |
+| `cpu_temperature` | Best-effort (ACPI WMI); often unavailable on desktops |
+| `cpu_power` / `dram_power` | Unavailable (no RAPL) |
+| GPU | NVIDIA via NVML only |
+| Focus Assist (`do_not_disturb`) | Read-only best-effort; switch cannot write |
+| `active_application` / `active_window_title` | Session helper (titles can be sensitive; disable in YAML if needed) |
+| Battery / AC | `GetSystemPowerStatus` |
+
+## Automatic updates
+
+Config block `update:` (see `config.example.yaml`):
+
+- `enabled` / `auto` default true; `github_repo` defaults to `pablogventura/ha-desktop-agent`.
+- The agent polls GitHub Releases, verifies `SHA256SUMS` + Ed25519 signature, then applies the matching asset (Linux `.deb` via `pkexec dpkg`, local binary under `~/.local/bin`, or Windows silent NSIS).
+- MQTT: `update_available`, `update_latest_version`, switch `update_auto`, button `apply_update`.
 
 ## Debian package
 

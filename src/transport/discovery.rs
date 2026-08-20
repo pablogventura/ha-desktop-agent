@@ -28,6 +28,7 @@ fn windows_machine_guid() -> Option<String> {
     use windows::core::w;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ,
+        REG_VALUE_TYPE,
     };
     unsafe {
         let mut key = Default::default();
@@ -38,21 +39,22 @@ fn windows_machine_guid() -> Option<String> {
             KEY_READ,
             &mut key,
         )
+        .ok()
         .ok()?;
         let mut data = [0u16; 64];
         let mut size = (data.len() * 2) as u32;
-        let mut kind = 0u32;
+        let mut kind = REG_VALUE_TYPE(0);
         let status = RegQueryValueExW(
             key,
             w!("MachineGuid"),
             None,
-            Some(&mut kind),
+            Some(&mut kind as *mut _),
             Some(data.as_mut_ptr() as *mut u8),
             Some(&mut size),
         );
         let _ = RegCloseKey(key);
-        status.ok()?;
-        if kind != REG_SZ.0 {
+        status.ok().ok()?;
+        if kind != REG_SZ {
             return None;
         }
         let guid = String::from_utf16_lossy(&data);

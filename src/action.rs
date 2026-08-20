@@ -1,5 +1,6 @@
 use crate::config::{CommandSpec, Config};
 use crate::entity::truncate_ha_state;
+use crate::update::UpdateController;
 use serde_json::{Map, Value as JsonValue};
 use std::time::Duration;
 use tokio::process::Command;
@@ -115,6 +116,7 @@ pub struct ActionRouter<'a> {
     session: Option<&'a LinuxSession>,
     #[cfg(target_os = "windows")]
     hub: Option<&'a SessionHub>,
+    update: Option<&'a UpdateController>,
 }
 
 impl<'a> ActionRouter<'a> {
@@ -122,6 +124,7 @@ impl<'a> ActionRouter<'a> {
         config: &'a Config,
         #[cfg(target_os = "linux")] session: Option<&'a LinuxSession>,
         #[cfg(target_os = "windows")] hub: Option<&'a SessionHub>,
+        update: Option<&'a UpdateController>,
     ) -> Self {
         Self {
             config,
@@ -129,6 +132,7 @@ impl<'a> ActionRouter<'a> {
             session,
             #[cfg(target_os = "windows")]
             hub,
+            update,
         }
     }
 
@@ -233,6 +237,17 @@ impl<'a> ActionRouter<'a> {
                     }
                 }
                 anyhow::bail!("lock is not supported on this platform");
+            }
+            "update_auto" => {
+                if !self.config.action_enabled("update_auto") {
+                    anyhow::bail!("update is disabled in config");
+                }
+                let Some(update) = self.update else {
+                    anyhow::bail!("update controller unavailable");
+                };
+                update.set_auto(on);
+                info!(on, "update_auto updated");
+                Ok(())
             }
             other => {
                 warn!("ignored switch for unknown entity {other}");
@@ -367,6 +382,17 @@ impl<'a> ActionRouter<'a> {
                     }
                 }
                 anyhow::bail!("mpris is not supported on this platform");
+            }
+            "apply_update" => {
+                if !self.config.action_enabled("apply_update") {
+                    anyhow::bail!("update is disabled in config");
+                }
+                let Some(update) = self.update else {
+                    anyhow::bail!("update controller unavailable");
+                };
+                update.apply_pending().await?;
+                info!("apply_update requested");
+                Ok(())
             }
             other => {
                 warn!("ignored press for unknown entity {other}");
