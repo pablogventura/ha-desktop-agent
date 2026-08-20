@@ -163,15 +163,4 @@ impl MqttTransport {
     pub fn try_recv_command(&mut self) -> Option<IncomingCommand> {
         self.commands.try_recv().ok()
     }
-
-    /// Send MQTT DISCONNECT so the broker discards LWT instead of publishing `offline`.
-    /// Avoids Home Assistant flipping every entity to unavailable during a planned restart.
-    pub async fn graceful_disconnect(&self) {
-        if let Err(err) = self.client.disconnect().await {
-            warn!("mqtt disconnect failed: {err}");
-            return;
-        }
-        // Let the event loop flush DISCONNECT before the process exits.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
 }
