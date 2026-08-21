@@ -63,6 +63,9 @@ impl MqttTransport {
         let (conn_tx, conn_rx) = tokio::sync::watch::channel(false);
         let prefix = config.mqtt.topic_prefix.clone();
         let device = device_id.to_string();
+        let availability = availability_topic(config, device_id);
+        let command_topic = command_filter(config, device_id);
+        let online_client = client.clone();
 
         tokio::spawn(async move {
             loop {
@@ -70,6 +73,25 @@ impl MqttTransport {
                     Ok(Event::Incoming(Incoming::ConnAck(_))) => {
                         info!("connected to MQTT broker");
                         let _ = conn_tx.send(true);
+                        // After a broker drop, LWT may have retained `offline`. Republish
+                        // availability and re-subscribe on every connect (including reconnects).
+                        let client = online_client.clone();
+                        let availability = availability.clone();
+                        let command_topic = command_topic.clone();
+                        tokio::spawn(async move {
+                            if let Err(err) = client
+                                .subscribe(command_topic, QoS::AtLeastOnce)
+                                .await
+                            {
+                                warn!("MQTT resubscribe failed: {err}");
+                            }
+                            if let Err(err) = client
+                                .publish(availability, QoS::AtLeastOnce, true, "online")
+                                .await
+                            {
+                                warn!("MQTT availability online publish failed: {err}");
+                            }
+                        });
                     }
                     Ok(Event::Incoming(Incoming::Publish(publish))) => {
                         if let Some(entity_id) =
